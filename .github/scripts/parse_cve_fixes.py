@@ -69,19 +69,34 @@ def parse_sarif_files(sarif_dir):
             if not rule:
                 continue
 
-            # Extract fixed version from rule properties
+            # Extract fixed version from rule
             fixed_version = None
+
+            # Try 1: properties.fixed-version / fixedVersion
             if 'properties' in rule:
                 props = rule['properties']
                 fixed_version = props.get('fixed-version') or props.get('fixedVersion')
 
-                # Sometimes it's in the solution field
+                # Try 2: properties.solution field
                 if not fixed_version and 'solution' in props:
                     solution = props['solution']
-                    # Try to extract version from solution text
                     match = re.search(r'(?:version\s+)?(\d+\.\d+(?:\.\d+)?(?:-[\w.]+)?)', solution, re.IGNORECASE)
                     if match:
                         fixed_version = match.group(1)
+
+            # Try 3: rule.help.text (Trivy format)
+            if not fixed_version and 'help' in rule:
+                help_text = rule['help'].get('text', '')
+                match = re.search(r'Fixed Version:\s*([^\s\n]+)', help_text)
+                if match:
+                    fixed_version = match.group(1)
+
+            # Try 4: result.message.text (Trivy format)
+            if not fixed_version:
+                msg_text = result.get('message', {}).get('text', '')
+                match = re.search(r'Fixed Version:\s*([^\s\n]+)', msg_text)
+                if match:
+                    fixed_version = match.group(1)
 
             # Store CVE info
             image_cves[image_ref][rule_id] = {
