@@ -134,9 +134,7 @@ def get_code_scanning_alerts(base_image, github_repo):
     # Use gh api to query code scanning alerts
     result = subprocess.run([
         'gh', 'api',
-        f'repos/{github_repo}/code-scanning/alerts',
-        '-f', 'state=open',
-        '-f', 'tool_name=Trivy',
+        f'repos/{github_repo}/code-scanning/alerts?tool_name=Trivy&state=open&per_page=100',
         '--jq', f'.[] | select(.most_recent_instance.category == "{category}") | {{number: .number, url: .html_url, rule_id: .rule.id}}'
     ], capture_output=True, text=True)
 
