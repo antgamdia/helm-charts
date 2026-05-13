@@ -13,6 +13,92 @@ from pathlib import Path
 from packaging import version
 
 
+def extract_revision(v):
+    """
+    Extract Alpine-style revision number from version string.
+    Examples: 1.2.3-r6 -> 6, 1.2.3-management-r2 -> 2
+    Returns: (base_version, revision_number)
+    """
+    match = re.search(r'-r(\d+)$', v)
+    if match:
+        revision = int(match.group(1))
+        base_version = v[:match.start()]
+        return (base_version, revision)
+    return (v, 0)
+
+
+def normalize_version(v):
+    """
+    Normalize a version string to make it parseable by packaging.version.
+    Handles common non-semver patterns like:
+    - 3.12.6-management-alpine -> 3.12.6
+    - 1.2.4_git20230717-r6 -> 1.2.4
+    Returns: (parsed_version, revision_number)
+    """
+    # Extract revision suffix first (-r1, -r2, etc.)
+    base_v, revision = extract_revision(v)
+
+    # Try parsing the base version as-is first
+    try:
+        return (version.parse(base_v), revision)
+    except:
+        pass
+
+    # Extract semver-like part (X.Y.Z optionally followed by -prerelease)
+    # Match patterns like: 1.2.3, 1.2.3-alpha, 1.2.3-rc.1
+    match = re.match(r'^(\d+\.\d+(?:\.\d+)?(?:-(?:alpha|beta|rc)[\w.]*)?)', base_v)
+    if match:
+        try:
+            return (version.parse(match.group(1)), revision)
+        except:
+            pass
+
+    # If all else fails, return the original string for lexicographic comparison
+    return (base_v, revision)
+
+
+def compare_versions(v1, v2):
+    """
+    Compare two version strings, with fallback to string comparison.
+    Handles Alpine-style revisions (-r1, -r2, etc.)
+    Returns: -1 if v1 < v2, 0 if equal, 1 if v1 > v2
+    """
+    try:
+        norm_v1, rev1 = normalize_version(v1)
+        norm_v2, rev2 = normalize_version(v2)
+
+        # If both are Version objects, compare them
+        if isinstance(norm_v1, version.Version) and isinstance(norm_v2, version.Version):
+            if norm_v1 < norm_v2:
+                return -1
+            elif norm_v1 > norm_v2:
+                return 1
+            else:
+                # Base versions equal, compare revisions
+                if rev1 < rev2:
+                    return -1
+                elif rev1 > rev2:
+                    return 1
+                else:
+                    return 0
+        # Otherwise fall back to string comparison
+        else:
+            if v1 < v2:
+                return -1
+            elif v1 > v2:
+                return 1
+            else:
+                return 0
+    except:
+        # Final fallback: string comparison
+        if v1 < v2:
+            return -1
+        elif v1 > v2:
+            return 1
+        else:
+            return 0
+
+
 def parse_sarif_files(sarif_dir):
     """Parse SARIF files and extract CVE fix information."""
     image_cves = {}  # {image_name: {cve_id: {severity, fixed_version}}}
@@ -142,40 +228,37 @@ def determine_target_versions(image_cves):
 
         # Determine the maximum version (that fixes ALL CVEs)
         try:
-            # Parse versions and find max
+            # Parse and sort versions to find max
             parsed_versions = []
             for v in fixable_versions:
-                try:
-                    parsed_versions.append((v, version.parse(v)))
-                except Exception as e:
-                    print(f"⚠️  Could not parse version {v}: {e}", file=sys.stderr)
+                norm_v, rev = normalize_version(v)
+                parsed_versions.append((v, norm_v, rev))
 
             if not parsed_versions:
                 continue
 
-            # Sort and get the highest version
-            parsed_versions.sort(key=lambda x: x[1])
+            # Sort by normalized version and revision
+            def version_sort_key(item):
+                _, norm_v, rev = item
+                if isinstance(norm_v, version.Version):
+                    return (0, norm_v, rev)  # Version objects sort first
+                else:
+                    return (1, norm_v, rev)  # Strings sort after
+
+            parsed_versions.sort(key=version_sort_key)
             target_version = parsed_versions[-1][0]
 
             # Only create update if target > current
-            try:
-                if version.parse(target_version) > version.parse(current_version):
-                    image_updates[image_ref] = {
-                        'base_image': base_image,
-                        'current_version': current_version,
-                        'target_version': target_version,
-                        'cves_fixed': cves_with_fixes
-                    }
-                    print(f"✅ Update available: {image_ref} → {base_image}:{target_version} (fixes {len(cves_with_fixes)} CVEs)")
-            except Exception as e:
-                print(f"⚠️  Could not compare versions for {image_ref}: {e}", file=sys.stderr)
-                # If version comparison fails, still suggest the update
+            if compare_versions(target_version, current_version) > 0:
                 image_updates[image_ref] = {
                     'base_image': base_image,
                     'current_version': current_version,
                     'target_version': target_version,
                     'cves_fixed': cves_with_fixes
                 }
+                print(f"✅ Update available: {image_ref} → {base_image}:{target_version} (fixes {len(cves_with_fixes)} CVEs)")
+            else:
+                print(f"ℹ️  Target version {target_version} is not newer than current {current_version}, skipping")
         except Exception as e:
             print(f"⚠️  Error processing versions for {image_ref}: {e}", file=sys.stderr)
 
