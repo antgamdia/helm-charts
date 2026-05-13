@@ -20,30 +20,26 @@ def parse_sarif_files(sarif_dir):
     for sarif_file in glob.glob(f'{sarif_dir}/*-trivy-results.sarif'):
         filename = Path(sarif_file).stem.replace('-trivy-results', '')
 
-        with open(sarif_file) as f:
-            sarif = json.load(f)
-
-        # Extract image reference from SARIF
+        # Load image reference from metadata file
+        info_file = os.path.join(sarif_dir, f'{filename}-image-info.json')
         image_ref = None
-        if 'runs' in sarif and sarif['runs']:
-            run = sarif['runs'][0]
-            if 'invocations' in run and run['invocations']:
-                invocation = run['invocations'][0]
-                if 'arguments' in invocation:
-                    for arg in invocation.get('arguments', []):
-                        if arg and not arg.startswith('-'):
-                            image_ref = arg
-                            break
 
-            # Fallback: try properties
-            if not image_ref and 'properties' in run:
-                image_ref = run['properties'].get('imageRef') or run['properties'].get('image')
+        if os.path.exists(info_file):
+            try:
+                with open(info_file) as f:
+                    info = json.load(f)
+                    image_ref = info.get('image')
+            except Exception as e:
+                print(f"⚠️  Could not read metadata file {info_file}: {e}", file=sys.stderr)
 
         if not image_ref:
-            print(f"⚠️  Could not extract image reference from {sarif_file}, skipping", file=sys.stderr)
+            print(f"⚠️  No image metadata found for {sarif_file}, skipping", file=sys.stderr)
             continue
 
         print(f"Processing {image_ref}")
+
+        with open(sarif_file) as f:
+            sarif = json.load(f)
 
         # Parse vulnerabilities
         if 'runs' not in sarif or not sarif['runs']:
