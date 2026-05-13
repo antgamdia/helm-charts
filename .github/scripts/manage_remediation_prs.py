@@ -8,51 +8,11 @@ import json
 import subprocess
 import re
 import sys
-import yaml
 from pathlib import Path
 
 
-def find_and_update_image_tag(data, path, base_image, current_version, target_version):
-    """Recursively search for image references and update tags."""
-    updates = []
-
-    if isinstance(data, dict):
-        # Check if this dict has 'image' or 'repository' field matching our base_image
-        if 'repository' in data:
-            repo = data['repository']
-            # Match either exact repository or full image ref (registry/repo)
-            if repo == base_image or base_image.endswith('/' + repo):
-                # Check if we have a tag field to update
-                if 'tag' in data:
-                    old_tag = str(data['tag'])
-                    # Only update if it matches current version
-                    if old_tag == current_version or old_tag.replace('v', '') == current_version.replace('v', ''):
-                        data['tag'] = target_version
-                        updates.append((path + ['tag'], old_tag, target_version))
-
-        # Also check for inline image references (e.g., 'image: registry/repo:tag')
-        if 'image' in data and isinstance(data['image'], str):
-            img = data['image']
-            # Check if this is a full image reference containing our base_image
-            if base_image in img and ':' in img:
-                img_base, img_tag = img.rsplit(':', 1)
-                if img_tag == current_version or img_tag.replace('v', '') == current_version.replace('v', ''):
-                    data['image'] = img_base + ':' + target_version
-                    updates.append((path + ['image'], img, data['image']))
-
-        # Recurse into nested dicts
-        for key, value in data.items():
-            updates.extend(find_and_update_image_tag(value, path + [key], base_image, current_version, target_version))
-
-    elif isinstance(data, list):
-        for idx, item in enumerate(data):
-            updates.extend(find_and_update_image_tag(item, path + [f'[{idx}]'], base_image, current_version, target_version))
-
-    return updates
-
-
 def update_values_files(base_image, current_version, target_version, charts_dir='charts'):
-    """Find and update all values.yaml files containing the image reference."""
+    """Find and update all values.yaml files containing the image reference using regex (preserves comments)."""
     values_files_to_update = []
     charts_path = Path(charts_dir)
 
@@ -61,22 +21,51 @@ def update_values_files(base_image, current_version, target_version, charts_dir=
 
     print(f"  🔍 Searching {len(values_files)} values.yaml files for {base_image}:{current_version}")
 
+    # Extract just the repository name for matching (e.g., "rabbitmq" from "docker.io/rabbitmq")
+    repo_name = base_image.split('/')[-1]
+
     for values_file in values_files:
         try:
             with open(values_file, 'r') as f:
-                values_data = yaml.safe_load(f)
+                content = f.read()
 
-            # Search and update
-            updates = find_and_update_image_tag(values_data, [], base_image, current_version, target_version)
+            original_content = content
+            updates = []
 
-            if updates:
-                # Write back to file
+            # Pattern 1: tag: "version" or tag: version (after repository line)
+            # This preserves all formatting, comments, and whitespace
+            pattern1 = re.compile(
+                r'(repository:\s*["\']?' + re.escape(repo_name) + r'["\']?\s*\n\s*.*?\n\s*tag:\s*["\']?)' +
+                re.escape(current_version) + r'(["\']?)',
+                re.MULTILINE | re.DOTALL
+            )
+
+            # Pattern 2: Simple tag: "version" anywhere (more lenient)
+            pattern2 = re.compile(
+                r'(\n\s*tag:\s*["\']?)' + re.escape(current_version) + r'(["\']?)',
+                re.MULTILINE
+            )
+
+            # Try pattern 1 first (more specific - repository + tag)
+            new_content, count1 = pattern1.subn(r'\g<1>' + target_version + r'\g<2>', content)
+            if count1 > 0:
+                content = new_content
+                updates.append(('tag (after repository)', current_version, target_version))
+            # Try pattern 2 (tag only, less specific)
+            elif re.search(repo_name, content, re.IGNORECASE):
+                # Only use pattern 2 if the file mentions this image
+                new_content, count2 = pattern2.subn(r'\g<1>' + target_version + r'\g<2>', content)
+                if count2 > 0:
+                    content = new_content
+                    updates.append(('tag', current_version, target_version))
+
+            if updates and content != original_content:
+                # Write back to file (preserves all comments and formatting)
                 with open(values_file, 'w') as f:
-                    yaml.dump(values_data, f, default_flow_style=False, sort_keys=False)
+                    f.write(content)
 
                 for path, old_val, new_val in updates:
-                    path_str = '.'.join(str(p) for p in path)
-                    print(f"  ✅ Updated {values_file}: {path_str}: {old_val} → {new_val}")
+                    print(f"  ✅ Updated {values_file}: {path}: {old_val} → {new_val}")
 
                 values_files_to_update.append(str(values_file))
         except Exception as e:
@@ -109,6 +98,7 @@ def close_pr(pr_number, reason):
 
 def create_pr(branch_name, pr_title, pr_body, labels):
     """Create a new PR."""
+    # Try to create PR with labels first
     label_args = []
     for label in labels:
         label_args.extend(['--label', label])
@@ -119,6 +109,15 @@ def create_pr(branch_name, pr_title, pr_body, labels):
         '--body', pr_body,
         *label_args
     ], capture_output=True, text=True)
+
+    # If failed due to labels, retry without labels
+    if result.returncode != 0 and 'not found' in result.stderr.lower():
+        print(f"    ⚠️  Labels not found, creating PR without labels")
+        result = subprocess.run([
+            'gh', 'pr', 'create',
+            '--title', pr_title,
+            '--body', pr_body
+        ], capture_output=True, text=True)
 
     return result
 
@@ -195,12 +194,25 @@ def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry
         subprocess.run(['git', 'config', 'user.name', 'github-actions[bot]'], check=True)
         subprocess.run(['git', 'config', 'user.email', 'github-actions[bot]@users.noreply.github.com'], check=True)
 
+        # Ensure we're starting from a clean state on main
+        subprocess.run(['git', 'checkout', 'main'], check=True)
+        subprocess.run(['git', 'pull', 'origin', 'main'], check=True)
+
         # Create and checkout new branch
         subprocess.run(['git', 'checkout', '-b', branch_name], check=True)
 
-        # Stage changes
+        # Stage only the values.yaml files we updated
         for file in values_files_to_update:
             subprocess.run(['git', 'add', file], check=True)
+
+        # Verify we're only committing the files we intended
+        status_result = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True)
+        staged_files = [line[3:] for line in status_result.stdout.split('\n') if line.startswith('A  ') or line.startswith('M  ')]
+
+        unexpected_files = set(staged_files) - set(values_files_to_update)
+        if unexpected_files:
+            print(f"  ⚠️  Warning: Unexpected files would be committed: {unexpected_files}")
+            print(f"  ℹ️  Continuing with only the intended files...")
 
         # Commit
         cve_list = ', '.join(cves_fixed[:5])
