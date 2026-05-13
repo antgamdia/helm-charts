@@ -9,7 +9,6 @@ import os
 import subprocess
 import re
 import sys
-import glob
 from pathlib import Path
 
 
@@ -124,38 +123,39 @@ def create_pr(branch_name, pr_title, pr_body, labels):
     return result
 
 
-def update_sarif_with_pr(sarif_file, pr_url, cves_fixed):
-    """Add PR URL to SARIF file as remediation link."""
-    try:
-        with open(sarif_file, 'r') as f:
-            sarif_data = json.load(f)
+def get_code_scanning_alerts(base_image, github_repo):
+    """Query GitHub Code Scanning API for alerts related to a specific image."""
+    if not github_repo:
+        return []
 
-        # Add fixes to each result matching the CVEs we're fixing
-        if 'runs' in sarif_data and sarif_data['runs']:
-            for run in sarif_data['runs']:
-                for result in run.get('results', []):
-                    cve_id = result.get('ruleId', '')
-                    if cve_id in cves_fixed:
-                        # Add fixes array with PR link
-                        if 'fixes' not in result:
-                            result['fixes'] = []
-                        result['fixes'].append({
-                            'description': {
-                                'text': f'Remediation PR: {pr_url}'
-                            }
-                        })
+    # The category in SARIF upload is based on base_name (sanitized base image)
+    category = f"container/{re.sub(r'[^a-zA-Z0-9-]', '-', base_image)}"
 
-        # Write updated SARIF
-        with open(sarif_file, 'w') as f:
-            json.dump(sarif_data, f, indent=2)
+    # Use gh api to query code scanning alerts
+    result = subprocess.run([
+        'gh', 'api',
+        f'repos/{github_repo}/code-scanning/alerts',
+        '-f', 'state=open',
+        '-f', 'tool_name=Trivy',
+        '--jq', f'.[] | select(.most_recent_instance.category == "{category}") | {{number: .number, url: .html_url, rule_id: .rule.id}}'
+    ], capture_output=True, text=True)
 
-        return True
-    except Exception as e:
-        print(f"  ⚠️  Failed to update SARIF {sarif_file}: {e}", file=sys.stderr)
-        return False
+    if result.returncode != 0:
+        print(f"  ⚠️  Failed to query code scanning alerts: {result.stderr}", file=sys.stderr)
+        return []
+
+    alerts = []
+    for line in result.stdout.strip().split('\n'):
+        if line:
+            try:
+                alerts.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+
+    return alerts
 
 
-def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry_run=False, sarif_dir='sarif-results'):
+def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry_run=False):
     """Main function to manage remediation PRs."""
     # Load image updates
     with open(image_updates_file) as f:
@@ -296,12 +296,21 @@ def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry
         pr_body = '## Summary\n'
         pr_body += f'Updates `{base_image}` from `{current_version}` to `{target_version}` to address security vulnerabilities.\n\n'
 
-        # Add links to Security alerts
+        # Query and add links to specific Code Scanning alerts
         if github_repo:
-            # Link to Code Scanning alerts filtered by this container category
-            category = re.sub(r'[^a-zA-Z0-9-]', '-', base_image)
-            security_url = f'{github_server_url}/{github_repo}/security/code-scanning?query=is:open+tool:Trivy'
-            pr_body += f'📊 **[View Security Alerts]({security_url})**\n\n'
+            alerts = get_code_scanning_alerts(base_image, github_repo)
+            if alerts:
+                pr_body += f'## 🔒 Security Alerts Fixed\n'
+                pr_body += f'This PR addresses the following Code Scanning alerts:\n\n'
+                for alert in alerts[:10]:  # Limit to first 10 alerts
+                    pr_body += f'- [{alert["rule_id"]}]({alert["url"]}) (Alert #{alert["number"]})\n'
+                if len(alerts) > 10:
+                    pr_body += f'- ...and {len(alerts) - 10} more alerts\n'
+                pr_body += '\n'
+            else:
+                # Fallback to general security alerts page
+                security_url = f'{github_server_url}/{github_repo}/security/code-scanning?query=is:open+tool:Trivy'
+                pr_body += f'📊 **[View Security Alerts]({security_url})**\n\n'
 
         # Link to workflow run that detected these CVEs
         if github_repo and github_run_id:
@@ -332,18 +341,6 @@ def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry
         if result.returncode == 0:
             pr_url = result.stdout.strip()
             print(f"  ✅ Created PR: {pr_url}")
-
-            # Update SARIF file to reference this PR
-            sarif_pattern = os.path.join(sarif_dir, f'*{label_safe_name}*-trivy-results.sarif')
-            sarif_files = glob.glob(sarif_pattern)
-
-            if sarif_files:
-                for sarif_file in sarif_files:
-                    print(f"  🔗 Linking SARIF {os.path.basename(sarif_file)} to PR")
-                    if update_sarif_with_pr(sarif_file, pr_url, cves_fixed):
-                        print(f"  ✅ Updated SARIF with PR link")
-            else:
-                print(f"  ⚠️  No SARIF file found matching {sarif_pattern}", file=sys.stderr)
         else:
             print(f"  ❌ Failed to create PR: {result.stderr}", file=sys.stderr)
 
@@ -358,11 +355,10 @@ def main():
     parser = argparse.ArgumentParser(description='Manage CVE remediation PRs')
     parser.add_argument('--input', default='image_updates.json', help='Input JSON file with image updates')
     parser.add_argument('--charts-dir', default='charts', help='Path to charts directory')
-    parser.add_argument('--sarif-dir', default='sarif-results', help='Directory containing SARIF files to update')
     parser.add_argument('--dry-run', action='store_true', help='Dry run mode (no git operations)')
     args = parser.parse_args()
 
-    sys.exit(manage_prs(args.input, args.charts_dir, args.dry_run, args.sarif_dir))
+    sys.exit(manage_prs(args.input, args.charts_dir, args.dry_run))
 
 
 if __name__ == '__main__':
