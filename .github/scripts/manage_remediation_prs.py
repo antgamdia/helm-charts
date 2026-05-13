@@ -153,6 +153,27 @@ def get_code_scanning_alerts(base_image, github_repo):
     return alerts
 
 
+def verify_image_exists(image_ref):
+    """Verify that a container image exists in the registry."""
+    print(f"  🔍 Verifying image exists: {image_ref}")
+
+    # Use docker buildx imagetools inspect to check if image exists without pulling it
+    result = subprocess.run(
+        ['docker', 'buildx', 'imagetools', 'inspect', image_ref],
+        capture_output=True,
+        text=True
+    )
+
+    if result.returncode == 0:
+        print(f"  ✅ Image verified: {image_ref}")
+        return True
+    else:
+        print(f"  ❌ Image not found in registry: {image_ref}", file=sys.stderr)
+        if result.stderr.strip():
+            print(f"     Error: {result.stderr.strip()}", file=sys.stderr)
+        return False
+
+
 def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry_run=False):
     """Main function to manage remediation PRs."""
     # Load image updates
@@ -220,19 +241,17 @@ def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry
         if skip_pr_creation:
             continue
 
+        # Verify the target image exists in the registry
+        target_image = f"{base_image}:{target_version}"
+        if not verify_image_exists(target_image):
+            print(f"  ⚠️  Skipping PR creation - target image does not exist in registry")
+            continue
+
         # Create new PR
         branch_name = f"cve-fix/{label_safe_name}/{target_version}"
         print(f"  📝 Creating PR for {base_image}:{target_version}")
 
-        # Update values.yaml file(s)
-        values_files_to_update = update_values_files(base_image, current_version, target_version, charts_dir)
-
-        if not values_files_to_update:
-            print(f"  ⚠️  No values.yaml files found containing {base_image}:{current_version}, skipping")
-            continue
-
         if dry_run:
-            print(f"  [DRY RUN] Would update files: {', '.join(values_files_to_update)}")
             print(f"  [DRY RUN] Would create branch: {branch_name}")
             continue
 
@@ -248,18 +267,34 @@ def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry
         local_branch_exists = subprocess.run(['git', 'rev-parse', '--verify', branch_name], capture_output=True).returncode == 0
         remote_branch_exists = subprocess.run(['git', 'ls-remote', '--heads', 'origin', branch_name], capture_output=True, text=True).stdout.strip() != ''
 
-        branch_exists = local_branch_exists or remote_branch_exists
-
-        if branch_exists:
+        if local_branch_exists or remote_branch_exists:
             location = []
             if local_branch_exists:
                 location.append('locally')
             if remote_branch_exists:
                 location.append('remotely')
             print(f"  ℹ️  Branch '{branch_name}' already exists {' and '.join(location)}, will create PR from existing branch")
+
+            # Checkout the existing branch
+            if local_branch_exists:
+                subprocess.run(['git', 'checkout', branch_name], check=True)
+            else:
+                # Fetch and checkout remote branch
+                subprocess.run(['git', 'fetch', 'origin', branch_name], check=True)
+                subprocess.run(['git', 'checkout', '-b', branch_name, f'origin/{branch_name}'], check=True)
         else:
             # Create and checkout new branch
             subprocess.run(['git', 'checkout', '-b', branch_name], check=True)
+
+            # Now update values.yaml file(s) in the new branch
+            values_files_to_update = update_values_files(base_image, current_version, target_version, charts_dir)
+
+            if not values_files_to_update:
+                print(f"  ⚠️  No values.yaml files found containing {base_image}:{current_version}, skipping")
+                # Delete the branch we just created since we're not using it
+                subprocess.run(['git', 'checkout', 'main'], check=True)
+                subprocess.run(['git', 'branch', '-D', branch_name], check=True)
+                continue
 
             # Stage only the values.yaml files we updated
             for file in values_files_to_update:
@@ -300,10 +335,8 @@ def manage_prs(image_updates_file='image_updates.json', charts_dir='charts', dry
             if alerts:
                 pr_body += f'## 🔒 Security Alerts Fixed\n'
                 pr_body += f'This PR addresses the following Code Scanning alerts:\n\n'
-                for alert in alerts[:10]:  # Limit to first 10 alerts
+                for alert in alerts:
                     pr_body += f'- [{alert["rule_id"]}]({alert["url"]}) (Alert #{alert["number"]})\n'
-                if len(alerts) > 10:
-                    pr_body += f'- ...and {len(alerts) - 10} more alerts\n'
                 pr_body += '\n'
             else:
                 # Fallback to general security alerts page
