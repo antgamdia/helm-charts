@@ -10,8 +10,11 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
+      from-source:
+        description: 'Test source: suse-release, oss-release, or oss-main'
+        required: false
       from-version:
-        description: 'Chart version to upgrade from (OCI tag in ghcr.io/trento-project/helm-charts/trento-server)'
+        description: 'Specific version override (defaults to latest for source)'
         required: false
 
 env:
@@ -19,8 +22,24 @@ env:
 
 jobs:
   upgrade-test:
-    name: Upgrade from ${{ inputs.from-version || 'latest' }}
+    name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        include:
+          - name: "SUSE latest release → current"
+            source: suse-release
+            registry: registry.suse.com/trento/trento-server
+            version: ""
+          - name: "OSS latest release → current"
+            source: oss-release
+            registry: ghcr.io/trento-project/helm-charts/trento-server
+            version: ""
+          - name: "OSS main branch → current"
+            source: oss-main
+            registry: ghcr.io/trento-project/helm-charts/trento-server
+            version: ""
+      fail-fast: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -30,48 +49,62 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
-      - name: Login to GHCR
-        run: |
-          echo ${{ github.token }} | helm registry login ghcr.io \
-            -u ${{ github.actor }} \
-            --password-stdin
-
-      - name: Resolve from-version
-        id: from-version
+      - name: Resolve chart source
+        id: source
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          source="${{ inputs.from-source || matrix.source }}"
+          registry="${{ matrix.registry }}"
+
+          # Use explicit version if provided, otherwise resolve latest for each source
           if [ -n "${{ inputs.from-version }}" ]; then
-            version="${{ inputs.from-version }}"
-          else
-            version=$(gh release list \
+            resolved_version="${{ inputs.from-version }}"
+          elif [ "$source" == "suse-release" ]; then
+            # List tags from SUSE registry, filter semantic versions, get latest
+            resolved_version=$(skopeo list-tags "docker://${registry}" | \
+              jq -r '.Tags | map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+"))) | sort -V | .[-1]')
+          elif [ "$source" == "oss-release" ]; then
+            # Get latest stable release tag from GitHub
+            resolved_version=$(gh release list \
               --repo trento-project/helm-charts \
               --exclude-pre-releases \
               --limit 1 \
               --json tagName \
               --jq '.[0].tagName')
+          else
+            # oss-main: use the chart version from Chart.yaml (OCI artifact tag in GHCR for rolling release)
+            resolved_version=$(grep '^version:' charts/trento-server/Chart.yaml | awk '{print $2}')
           fi
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "Upgrading from: ${version}"
+
+          echo "source=${source}" >> "$GITHUB_OUTPUT"
+          echo "registry=${registry}" >> "$GITHUB_OUTPUT"
+          echo "version=${resolved_version}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${source} → ${resolved_version}"
+
+      - name: Login to GHCR (OSS sources only)
+        if: contains(steps.source.outputs.source, 'oss')
+        run: |
+          echo ${{ github.token }} | helm registry login ghcr.io \
+            -u ${{ github.actor }} \
+            --password-stdin
 
       - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
 
-      - name: Install chart from OCI (from-version)
+      - name: Install chart from ${{ steps.source.outputs.source }}
         run: |
           helm install trento-server \
-            oci://ghcr.io/trento-project/helm-charts/trento-server \
-            --version "${{ steps.from-version.outputs.version }}" \
+            oci://${{ steps.source.outputs.registry }} \
+            --version "${{ steps.source.outputs.version }}" \
             --namespace trento \
             --create-namespace \
             --wait \
             --timeout 10m \
             -f .github/test-values/upgrade-test.yaml
 
-      - name: Upgrade to dev chart
+      - name: Upgrade to current dev chart
         run: |
-          # prometheus-community repo is needed by `helm dependency build` even
-          # when prometheus is disabled, because it appears in Chart.yaml.
           helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
           helm dependency build charts/trento-server
           helm upgrade trento-server charts/trento-server \
