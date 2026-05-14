@@ -9,6 +9,8 @@ trento-wanda:
 
 trento-mcp-server:
   enabled: true
+  mcpServer:
+    enableHealthCheck: false
 
 prometheus:
   enabled: true
@@ -19,13 +21,6 @@ prometheus:
 trento-web:
   ingress:
     enabled: false
-
-rabbitmq:
-  service:
-    type: ClusterIP
-  # Static config: skip the Go-template expression in the default extraConfiguration.
-  extraConfiguration: |
-    listeners.tcp.default = 5672
 
 global:
   trentoWeb:

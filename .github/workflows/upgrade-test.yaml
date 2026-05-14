@@ -137,22 +137,17 @@ jobs:
               --timeout 10m \
               -f .github/test-values/upgrade-test.yaml
           else
-            # Download and install from GitHub release tar.gz
+            # Download and install from GitHub release packaged chart
             echo "Downloading chart from GitHub release: ${VERSION}"
-            wget -q https://github.com/trento-project/helm-charts/archive/refs/tags/${VERSION}.tar.gz
-            tar -xzf ${VERSION}.tar.gz
+            wget -q "https://github.com/trento-project/helm-charts/releases/download/${VERSION}/trento-server-${VERSION}.tgz"
+            tar -xzf "trento-server-${VERSION}.tgz"
 
-            cd helm-charts-${VERSION}/charts/trento-server
-            helm dependency update
-
-            helm install trento-server . \
+            helm install trento-server ./trento-server \
               --namespace trento \
               --create-namespace \
               --wait \
               --timeout 10m \
-              -f ../../../.github/test-values/upgrade-test.yaml
-
-            cd ../../..
+              -f .github/test-values/upgrade-test.yaml
           fi
 
       - name: Build chart dependencies
