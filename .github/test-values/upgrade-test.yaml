@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# Full chart upgrade testing values for k3s.
+# Tests upgrade with all components enabled.
+
+trento-wanda:
+  enabled: true
+  ingress:
+    enabled: true
+    hosts:
+      - host: localhost
+        paths:
+          - path: /wanda
+            pathType: ImplementationSpecific
+
+trento-mcp-server:
+  enabled: true
+  ingress:
+    enabled: true
+    hosts:
+      - host: localhost
+        paths:
+          - path: /mcp-server-trento
+            pathType: ImplementationSpecific
+
+prometheus:
+  enabled: true
+  server:
+    auth:
+      type: none
+
+trento-web:
+  adminUser:
+    password: "admin-test-password"
+  ingress:
+    enabled: true
+    hosts:
+      - host: localhost
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
+
+global:
+  trentoWeb:
+    origin: "localhost"
+  postgresql:
+    postgresqlPassword: "trento-test"
+  rabbitmq:
+    auth:
+      password: "trento-test"
