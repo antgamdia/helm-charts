@@ -81,7 +81,7 @@ prometheus:
   server:
     enabled: true
     image:
-      tag: v2.53.1
+      tag: v3.11.3
     configMapOverrideName: prometheus-configmap
     prefixURL: "/prometheus"
     baseURL: "/prometheus"
