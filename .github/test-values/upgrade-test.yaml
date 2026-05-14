@@ -6,11 +6,23 @@
 
 trento-wanda:
   enabled: true
+  ingress:
+    enabled: true
+    hosts:
+      - host: localhost
+        paths:
+          - path: /wanda
+            pathType: ImplementationSpecific
 
 trento-mcp-server:
   enabled: true
-  mcpServer:
-    enableHealthCheck: false
+  ingress:
+    enabled: true
+    hosts:
+      - host: localhost
+        paths:
+          - path: /mcp-server-trento
+            pathType: ImplementationSpecific
 
 prometheus:
   enabled: true
@@ -20,7 +32,12 @@ prometheus:
 
 trento-web:
   ingress:
-    enabled: false
+    enabled: true
+    hosts:
+      - host: localhost
+        paths:
+          - path: /
+            pathType: ImplementationSpecific
 
 global:
   trentoWeb:

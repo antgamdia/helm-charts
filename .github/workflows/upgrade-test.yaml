@@ -100,6 +100,12 @@ jobs:
         run: |
           echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
+      - name: Add helm repositories
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+
       - name: Create k3s cluster
         uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
         with:
@@ -134,26 +140,48 @@ jobs:
               --namespace trento \
               --create-namespace \
               --wait \
-              --timeout 10m \
+              --timeout 2m \
               -f .github/test-values/upgrade-test.yaml
           else
-            # Download and install from GitHub release packaged chart
+            # Download and install from GitHub release source archive
             echo "Downloading chart from GitHub release: ${VERSION}"
-            wget -q "https://github.com/trento-project/helm-charts/releases/download/${VERSION}/trento-server-${VERSION}.tgz"
-            tar -xzf "trento-server-${VERSION}.tgz"
+            wget -q "https://github.com/trento-project/helm-charts/archive/refs/tags/${VERSION}.tar.gz"
+            tar -xzf "${VERSION}.tar.gz"
 
-            helm install trento-server ./trento-server \
+            cd "helm-charts-${VERSION}/charts/trento-server"
+            helm dependency update
+
+            helm install trento-server . \
               --namespace trento \
               --create-namespace \
               --wait \
-              --timeout 10m \
-              -f .github/test-values/upgrade-test.yaml
+              --timeout 2m \
+              -f ../../../.github/test-values/upgrade-test.yaml
+
+            cd ../../..
           fi
 
-      - name: Build chart dependencies
+      - name: Check pod status after install
+        if: always()
         run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm dependency build charts/trento-server
+          echo "=== Pod status ==="
+          kubectl get pods -n trento -o wide
+
+          echo ""
+          echo "=== Pods not running ==="
+          kubectl get pods -n trento --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "All pods running"
+
+          echo ""
+          echo "=== Recent events ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp' | tail -20
+
+          echo ""
+          echo "=== Pod logs for failed/pending pods ==="
+          for pod in $(kubectl get pods -n trento --field-selector=status.phase!=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
+            echo "--- Logs for $pod ---"
+            kubectl logs -n trento "$pod" --all-containers=true --tail=50 --ignore-errors=true || echo "No logs available"
+            echo ""
+          done
 
       - name: Compare container versions (before upgrade)
         run: |
