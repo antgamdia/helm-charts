@@ -63,22 +63,25 @@ def list_image_tags(base_image):
 
 
 def parse_version_from_tag(tag, suffix_pattern=None):
-    """Extract semantic version from a tag, handling common suffixes."""
+    """Extract semantic version from a tag, handling common suffixes and prefixes."""
     # If suffix pattern provided, extract version before the suffix
     if suffix_pattern:
-        match = re.match(rf'^([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?){suffix_pattern}', tag)
+        # Support optional 'v' prefix and major-only versions (e.g., "14", "v1")
+        match = re.match(rf'^v?([0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?(?:\.[0-9]+)?){suffix_pattern}', tag)
         if match:
             version_str = match.group(1)
             # Extract the actual suffix from the tag (not the pattern)
-            suffix = tag[len(version_str):]
+            suffix = tag[len(version_str) + (1 if tag.startswith('v') else 0):]
             return version_str, suffix
 
     # Try to extract version from start of tag
-    match = re.match(r'^([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?)', tag)
+    # Support optional 'v' prefix (kubectl) and major-only versions (postgres:14)
+    match = re.match(r'^v?([0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?(?:\.[0-9]+)?)', tag)
     if match:
         version_str = match.group(1)
-        # Extract suffix (everything after version)
-        suffix = tag[len(version_str):]
+        # Extract suffix (everything after version, excluding 'v' prefix)
+        offset = len(version_str) + (1 if tag.startswith('v') else 0)
+        suffix = tag[offset:]
         return version_str, suffix
 
     return None, None
