@@ -16,6 +16,8 @@ trento-wanda:
 
 trento-mcp-server:
   enabled: true
+  image:
+    tag: rolling
   ingress:
     enabled: true
     hosts:

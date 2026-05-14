@@ -183,6 +183,10 @@ jobs:
             echo ""
           done
 
+      - name: Build chart dependencies for current dev chart
+        run: |
+          helm dependency build charts/trento-server
+
       - name: Compare container versions (before upgrade)
         run: |
           echo "=== Extracting current deployed images ==="
