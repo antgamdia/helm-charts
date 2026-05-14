@@ -19,6 +19,8 @@ on:
 
 env:
   HELM_VERSION: v4.2.0
+  K3S_VERSION: v1.31.2+k3s1
+  CERT_MANAGER_VERSION: v1.16.2
 
 jobs:
   upgrade-test:
@@ -82,20 +84,24 @@ jobs:
           echo "version=${resolved_version}" >> "$GITHUB_OUTPUT"
           echo "Resolved: ${source} → ${resolved_version}"
 
-      - name: Login to GHCR (OSS sources only)
-        if: contains(steps.source.outputs.source, 'oss')
-        run: |
-          echo ${{ github.token }} | helm registry login ghcr.io \
-            -u ${{ github.actor }} \
-            --password-stdin
-
       - name: Create k3s cluster
+        uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
+        with:
+          k3s-version: ${{ env.K3S_VERSION }}
+
+      - name: Install cert-manager CRDs
+        run: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${{ env.CERT_MANAGER_VERSION }}/cert-manager.crds.yaml
+
+      - name: Install cert-manager
         run: |
-          curl -sfL https://get.k3s.io | sh -
-          mkdir -p ~/.kube
-          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
-          sudo chown $(id -u):$(id -g) ~/.kube/config
-          kubectl wait --for=condition=ready node --all --timeout=300s
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+          helm install cert-manager jetstack/cert-manager \
+            --namespace cert-manager \
+            --create-namespace \
+            --version ${{ env.CERT_MANAGER_VERSION }} \
+            --wait
+        continue-on-error: true
 
       - name: Install chart from ${{ steps.source.outputs.source }}
         run: |
