@@ -16,8 +16,6 @@ trento-wanda:
 
 trento-mcp-server:
   enabled: true
-  image:
-    tag: rolling
   ingress:
     enabled: true
     hosts:
@@ -33,6 +31,8 @@ prometheus:
       type: none
 
 trento-web:
+  adminUser:
+    password: "admin-test-password"
   ingress:
     enabled: true
     hosts:

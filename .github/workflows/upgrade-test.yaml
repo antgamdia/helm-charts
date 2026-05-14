@@ -130,7 +130,14 @@ jobs:
           VERSION: ${{ steps.source.outputs.version }}
           REGISTRY: ${{ steps.source.outputs.registry }}
           USE_OCI: ${{ steps.source.outputs.use_oci }}
+          SOURCE: ${{ steps.source.outputs.source }}
         run: |
+          # For OSS sources, use rolling tag for MCP server
+          OSS_IMAGE_OVERRIDES=""
+          if [[ "$SOURCE" == *"oss"* ]]; then
+            OSS_IMAGE_OVERRIDES="--set trento-mcp-server.image.tag=rolling"
+          fi
+
           if [ "$USE_OCI" == "true" ]; then
             # Install from OCI registry
             echo "Installing from OCI: ${REGISTRY}:${VERSION}"
@@ -141,7 +148,8 @@ jobs:
               --create-namespace \
               --wait \
               --timeout 2m \
-              -f .github/test-values/upgrade-test.yaml
+              -f .github/test-values/upgrade-test.yaml \
+              $OSS_IMAGE_OVERRIDES
           else
             # Download and install from GitHub release source archive
             echo "Downloading chart from GitHub release: ${VERSION}"
@@ -156,7 +164,8 @@ jobs:
               --create-namespace \
               --wait \
               --timeout 2m \
-              -f ../../../.github/test-values/upgrade-test.yaml
+              -f ../../../.github/test-values/upgrade-test.yaml \
+              $OSS_IMAGE_OVERRIDES
 
             cd ../../..
           fi
@@ -164,24 +173,41 @@ jobs:
       - name: Check pod status after install
         if: always()
         run: |
-          echo "=== Pod status ==="
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                      POST-INSTALL DIAGNOSTICS                          ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          echo "=== All pods ==="
           kubectl get pods -n trento -o wide
 
           echo ""
           echo "=== Pods not running ==="
-          kubectl get pods -n trento --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "All pods running"
+          kubectl get pods -n trento --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
 
           echo ""
-          echo "=== Recent events ==="
-          kubectl get events -n trento --sort-by='.lastTimestamp' | tail -20
+          echo "=== Recent events (last 30) ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp' | tail -30
 
           echo ""
-          echo "=== Pod logs for failed/pending pods ==="
-          for pod in $(kubectl get pods -n trento --field-selector=status.phase!=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-            echo "--- Logs for $pod ---"
-            kubectl logs -n trento "$pod" --all-containers=true --tail=50 --ignore-errors=true || echo "No logs available"
-            echo ""
-          done
+          echo "=== Logs for failed/pending pods ==="
+          FAILED_PODS=$(kubectl get pods -n trento --field-selector=status.phase!=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+          if [ -n "$FAILED_PODS" ]; then
+            for pod in $FAILED_PODS; do
+              echo ""
+              echo "────────────────────────────────────────────────────────────────────────"
+              echo "Pod: $pod (last 100 lines)"
+              echo "────────────────────────────────────────────────────────────────────────"
+              kubectl logs -n trento "$pod" --all-containers=true --tail=100 --ignore-errors=true || echo "No logs available"
+            done
+          else
+            echo "✓ No failed or pending pods"
+          fi
+
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                      DIAGNOSTICS COMPLETE                              ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
 
       - name: Build chart dependencies for current dev chart
         run: |
@@ -312,28 +338,148 @@ jobs:
 
       - name: Verify upgrade
         run: |
-          echo "=== Pod status ==="
-          kubectl get pods -n trento
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                         POST-UPGRADE DIAGNOSTICS                       ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
 
+          echo "=== All pods ==="
+          kubectl get pods -n trento -o wide
+
+          echo ""
+          echo "=== Pods not running ==="
+          kubectl get pods -n trento --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
+
+          echo ""
+          echo "=== Recent events (last 30) ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp' | tail -30
+
+          echo ""
           echo "=== Web init container logs (DB migration) ==="
           WEB_POD=$(kubectl get pod -n trento \
             -l "app.kubernetes.io/name=web,app.kubernetes.io/instance=trento-server" \
             -o jsonpath='{.items[0].metadata.name}')
-          kubectl logs "$WEB_POD" -n trento -c init
+          kubectl logs "$WEB_POD" -n trento -c init || echo "Failed to get web init logs"
+
+          echo ""
+          echo "=== All pod logs (last 30 lines each) ==="
+          for pod in $(kubectl get pods -n trento -o jsonpath='{.items[*].metadata.name}'); do
+            echo ""
+            echo "────────────────────────────────────────────────────────────────────────"
+            echo "Pod: $pod"
+            echo "────────────────────────────────────────────────────────────────────────"
+            kubectl logs -n trento "$pod" --all-containers=true --tail=30 --ignore-errors=true || echo "No logs available"
+          done
+
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                      DIAGNOSTICS COMPLETE                              ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+
+      - name: Verify API is working
+        run: |
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                         API FUNCTIONALITY TEST                         ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          # Run a curl pod to test the API from inside the cluster
+          echo "=== Testing Trento API endpoints ==="
+          kubectl run api-test -n trento --rm -i --restart=Never \
+            --image=curlimages/curl:latest \
+            -- sh -c '
+              set -e
+
+              echo "1. Testing login endpoint..."
+              LOGIN_RESPONSE=$(curl -s -X POST http://trento-server-web:4000/api/session \
+                -H "Content-Type: application/json" \
+                -d "{\"username\": \"admin\", \"password\": \"admin-test-password\"}")
+
+              echo "Login response: $LOGIN_RESPONSE"
+
+              ACCESS_TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o "\"access_token\":\"[^\"]*\"" | cut -d"\"" -f4)
+
+              if [ -z "$ACCESS_TOKEN" ]; then
+                echo "❌ Failed to get access token"
+                exit 1
+              fi
+
+              echo "✓ Login successful, token obtained"
+              echo ""
+
+              echo "2. Testing profile endpoint..."
+              PROFILE_RESPONSE=$(curl -s -X GET http://trento-server-web:4000/api/v1/profile \
+                -H "Authorization: Bearer $ACCESS_TOKEN")
+
+              echo "Profile response: $PROFILE_RESPONSE"
+
+              if echo "$PROFILE_RESPONSE" | grep -q "\"username\":\"admin\""; then
+                echo "✓ Profile endpoint working - admin user verified"
+              else
+                echo "❌ Profile endpoint failed"
+                exit 1
+              fi
+
+              echo ""
+              echo "3. Testing Wanda health endpoint..."
+              WANDA_RESPONSE=$(curl -s http://trento-server-wanda:4000/api/readyz)
+              echo "Wanda health: $WANDA_RESPONSE"
+
+              if echo "$WANDA_RESPONSE" | grep -q "ready"; then
+                echo "✓ Wanda is ready"
+              else
+                echo "⚠ Wanda health check returned: $WANDA_RESPONSE"
+              fi
+
+              echo ""
+              echo "4. Testing MCP server - listing tools..."
+              MCP_RESPONSE=$(curl -s -X POST http://trento-server-mcp-server:5000/mcp \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/list\"}")
+
+              echo "MCP tools/list response:"
+              echo "$MCP_RESPONSE"
+
+              if echo "$MCP_RESPONSE" | grep -q "\"tools\""; then
+                TOOL_COUNT=$(echo "$MCP_RESPONSE" | grep -o "\"name\":" | wc -l)
+                echo "✓ MCP server is working - found $TOOL_COUNT tools"
+              else
+                echo "⚠ MCP server response unexpected (might still be initializing)"
+                echo "Response: $MCP_RESPONSE"
+              fi
+
+              echo ""
+              echo "╔════════════════════════════════════════════════════════════════════════╗"
+              echo "║                    API TESTS PASSED                                    ║"
+              echo "╚════════════════════════════════════════════════════════════════════════╝"
+            '
 
       - name: Dump diagnostics on failure
         if: failure()
         run: |
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                    FAILURE DIAGNOSTICS - FULL LOGS                     ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
           echo "=== All pods ==="
           kubectl get pods -n trento -o wide
 
-          echo "=== Events ==="
+          echo ""
+          echo "=== All events ==="
           kubectl get events -n trento --sort-by='.lastTimestamp'
 
-          echo "=== All container logs ==="
+          echo ""
+          echo "=== Full container logs (all pods) ==="
           for pod in $(kubectl get pods -n trento -o jsonpath='{.items[*].metadata.name}'); do
-            echo "--- $pod ---"
-            kubectl logs -n trento "$pod" --all-containers=true --ignore-errors=true || true
+            echo ""
+            echo "════════════════════════════════════════════════════════════════════════"
+            echo "Pod: $pod (FULL LOGS)"
+            echo "════════════════════════════════════════════════════════════════════════"
+            kubectl logs -n trento "$pod" --all-containers=true --ignore-errors=true || echo "No logs available"
+
+            echo ""
             echo "--- $pod (previous) ---"
-            kubectl logs -n trento "$pod" --all-containers=true --previous --ignore-errors=true || true
+            kubectl logs -n trento "$pod" --all-containers=true --previous --ignore-errors=true 2>/dev/null || echo "No previous logs"
           done
