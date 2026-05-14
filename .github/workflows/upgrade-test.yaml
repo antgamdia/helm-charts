@@ -1,0 +1,103 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
+name: Chart Upgrade Test
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      from-version:
+        description: 'Chart version to upgrade from (OCI tag in ghcr.io/trento-project/helm-charts/trento-server)'
+        required: false
+
+env:
+  HELM_VERSION: v4.2.0
+
+jobs:
+  upgrade-test:
+    name: Upgrade from ${{ inputs.from-version || 'latest' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Resolve from-version
+        id: from-version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ inputs.from-version }}" ]; then
+            version="${{ inputs.from-version }}"
+          else
+            version=$(gh release list \
+              --repo trento-project/helm-charts \
+              --exclude-pre-releases \
+              --limit 1 \
+              --json tagName \
+              --jq '.[0].tagName')
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Upgrading from: ${version}"
+
+      - name: Create kind cluster
+        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+
+      - name: Install chart from OCI (from-version)
+        run: |
+          helm install trento-server \
+            oci://ghcr.io/trento-project/helm-charts/trento-server \
+            --version "${{ steps.from-version.outputs.version }}" \
+            --namespace trento \
+            --create-namespace \
+            --wait \
+            --timeout 10m \
+            -f .github/test-values/upgrade-test.yaml
+
+      - name: Upgrade to dev chart
+        run: |
+          # prometheus-community repo is needed by `helm dependency build` even
+          # when prometheus is disabled, because it appears in Chart.yaml.
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm dependency build charts/trento-server
+          helm upgrade trento-server charts/trento-server \
+            --namespace trento \
+            --wait \
+            --timeout 10m \
+            -f .github/test-values/upgrade-test.yaml
+
+      - name: Verify upgrade
+        run: |
+          echo "=== Pod status ==="
+          kubectl get pods -n trento
+
+          echo "=== Web init container logs (DB migration) ==="
+          WEB_POD=$(kubectl get pod -n trento \
+            -l "app.kubernetes.io/name=web,app.kubernetes.io/instance=trento-server" \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl logs "$WEB_POD" -n trento -c init
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          echo "=== All pods ==="
+          kubectl get pods -n trento -o wide
+
+          echo "=== Events ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp'
+
+          echo "=== All container logs ==="
+          for pod in $(kubectl get pods -n trento -o jsonpath='{.items[*].metadata.name}'); do
+            echo "--- $pod ---"
+            kubectl logs -n trento "$pod" --all-containers=true --ignore-errors=true || true
+            echo "--- $pod (previous) ---"
+            kubectl logs -n trento "$pod" --all-containers=true --previous --ignore-errors=true || true
+          done

@@ -1,0 +1,31 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
+# Minimal values for chart upgrade testing in a kind cluster.
+# Disables components not required for DB migration validation,
+# and adjusts service types for a cluster without a cloud load-balancer.
+
+trento-wanda:
+  enabled: false
+
+trento-mcp-server:
+  enabled: false
+
+prometheus:
+  enabled: false
+
+rabbitmq:
+  service:
+    type: ClusterIP
+  # Static config: skip the Go-template expression in the default extraConfiguration.
+  extraConfiguration: |
+    listeners.tcp.default = 5672
+
+global:
+  trentoWeb:
+    origin: "localhost"
+  postgresql:
+    postgresqlPassword: "trento-test"
+  rabbitmq:
+    auth:
+      password: "trento-test"
