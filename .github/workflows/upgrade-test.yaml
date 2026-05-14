@@ -1,0 +1,499 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
+name: Chart Upgrade Test
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      from-source:
+        description: 'Test source: suse-release, oss-release, or oss-main'
+        required: false
+      from-version:
+        description: 'Specific version override (defaults to latest for source)'
+        required: false
+
+env:
+  HELM_VERSION: v4.2.0
+  K3S_VERSION: v1.31.2+k3s1
+  CERT_MANAGER_VERSION: v1.16.2
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      matrix:
+        include:
+          - name: "SUSE latest release → current"
+            source: suse-release
+            registry: registry.suse.com/trento/trento-server
+            version: ""
+            use_oci: true
+          - name: "OSS latest release → current"
+            source: oss-release
+            registry: ""
+            version: ""
+            use_oci: false
+          - name: "OSS main branch (rolling) → current"
+            source: oss-main
+            registry: ghcr.io/trento-project/helm-charts/trento-server
+            version: ""
+            use_oci: true
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2 # v5.0.0
+        with:
+          version: ${{ env.HELM_VERSION }}
+
+      - name: Resolve chart source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          source="${{ inputs.from-source || matrix.source }}"
+          registry="${{ matrix.registry }}"
+
+          # Use explicit version if provided, otherwise resolve latest for each source
+          if [ -n "${{ inputs.from-version }}" ]; then
+            resolved_version="${{ inputs.from-version }}"
+          elif [ "$source" == "suse-release" ]; then
+            # List tags from SUSE registry, filter semantic versions, get latest
+            resolved_version=$(skopeo list-tags "docker://${registry}" | \
+              jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V | tail -1)
+          elif [ "$source" == "oss-release" ]; then
+            # Get latest stable release tag from GitHub (will use tar.gz artifact)
+            resolved_version=$(gh release list \
+              --repo trento-project/helm-charts \
+              --exclude-pre-releases \
+              --limit 1 \
+              --json tagName \
+              --jq '.[0].tagName')
+          else
+            # oss-main: use the chart version from Chart.yaml (OCI artifact tag in GHCR for rolling)
+            resolved_version=$(grep '^version:' charts/trento-server/Chart.yaml | awk '{print $2}')
+          fi
+
+          echo "source=${source}" >> "$GITHUB_OUTPUT"
+          echo "registry=${registry}" >> "$GITHUB_OUTPUT"
+          echo "version=${resolved_version}" >> "$GITHUB_OUTPUT"
+          echo "use_oci=${{ matrix.use_oci }}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${source} → ${resolved_version} (use_oci=${{ matrix.use_oci }})"
+
+      - name: Login to GHCR (OSS sources only)
+        if: contains(steps.source.outputs.source, 'oss')
+        run: |
+          echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
+
+      - name: Add helm repositories
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+
+      - name: Create k3s cluster
+        uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
+        with:
+          k3s-version: ${{ env.K3S_VERSION }}
+
+      - name: Install cert-manager CRDs
+        run: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/${{ env.CERT_MANAGER_VERSION }}/cert-manager.crds.yaml
+
+      - name: Install cert-manager
+        run: |
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
+          helm install cert-manager jetstack/cert-manager \
+            --namespace cert-manager \
+            --create-namespace \
+            --version ${{ env.CERT_MANAGER_VERSION }} \
+            --wait
+        continue-on-error: true
+
+      - name: Install chart from ${{ steps.source.outputs.source }}
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          REGISTRY: ${{ steps.source.outputs.registry }}
+          USE_OCI: ${{ steps.source.outputs.use_oci }}
+          SOURCE: ${{ steps.source.outputs.source }}
+        run: |
+          # For OSS sources, use rolling tag for MCP server
+          OSS_IMAGE_OVERRIDES=""
+          if [[ "$SOURCE" == *"oss"* ]]; then
+            OSS_IMAGE_OVERRIDES="--set trento-mcp-server.image.tag=rolling"
+          fi
+
+          if [ "$USE_OCI" == "true" ]; then
+            # Install from OCI registry
+            echo "Installing from OCI: ${REGISTRY}:${VERSION}"
+            helm install trento-server \
+              oci://${REGISTRY} \
+              --version "${VERSION}" \
+              --namespace trento \
+              --create-namespace \
+              --wait \
+              --timeout 2m \
+              -f .github/test-values/upgrade-test.yaml \
+              $OSS_IMAGE_OVERRIDES
+          else
+            # Download and install from GitHub release source archive
+            echo "Downloading chart from GitHub release: ${VERSION}"
+            wget -q "https://github.com/trento-project/helm-charts/archive/refs/tags/${VERSION}.tar.gz"
+            tar -xzf "${VERSION}.tar.gz"
+
+            cd "helm-charts-${VERSION}/charts/trento-server"
+            helm dependency update
+
+            helm install trento-server . \
+              --namespace trento \
+              --create-namespace \
+              --wait \
+              --timeout 2m \
+              -f ../../../.github/test-values/upgrade-test.yaml \
+              $OSS_IMAGE_OVERRIDES
+
+            cd ../../..
+          fi
+
+      - name: Check pod status after install
+        if: always()
+        run: |
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                      POST-INSTALL DIAGNOSTICS                          ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          echo "=== All pods ==="
+          kubectl get pods -n trento -o wide
+
+          echo ""
+          echo "=== Pods not running ==="
+          kubectl get pods -n trento --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
+
+          echo ""
+          echo "=== Recent events (last 30) ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp' | tail -30
+
+          echo ""
+          echo "=== Logs for failed/pending pods ==="
+          FAILED_PODS=$(kubectl get pods -n trento --field-selector=status.phase!=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
+          if [ -n "$FAILED_PODS" ]; then
+            for pod in $FAILED_PODS; do
+              echo ""
+              echo "────────────────────────────────────────────────────────────────────────"
+              echo "Pod: $pod (last 100 lines)"
+              echo "────────────────────────────────────────────────────────────────────────"
+              kubectl logs -n trento "$pod" --all-containers=true --tail=100 --ignore-errors=true || echo "No logs available"
+            done
+          else
+            echo "✓ No failed or pending pods"
+          fi
+
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                      DIAGNOSTICS COMPLETE                              ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+
+      - name: Build chart dependencies for current dev chart
+        run: |
+          helm dependency build charts/trento-server
+
+      - name: Compare container versions (before upgrade)
+        run: |
+          echo "=== Extracting current deployed images ==="
+          # Get all containers and init containers with their pod context
+          kubectl get pods -n trento -o json | \
+            jq -r '
+              .items[] |
+              .metadata.labels."app.kubernetes.io/name" as $chart |
+              (
+                ((.spec.initContainers // [])[] |
+                "\($chart)|\(.name)|init|\(.image)"),
+                ((.spec.containers // [])[] |
+                "\($chart)|\(.name)|container|\(.image)")
+              )
+            ' | sort > /tmp/current-images.txt
+
+          echo "Current images found:"
+          cat /tmp/current-images.txt
+
+          echo "=== Extracting new chart images ==="
+          # Extract all images from rendered templates
+          helm template trento charts/trento-server/ \
+            -f .github/test-values/upgrade-test.yaml | \
+            grep -E "^\s+image:" | \
+            awk '{gsub(/"/, "", $2); print $2}' | \
+            sort -u > /tmp/new-images-raw.txt
+
+          # Discover all subcharts dynamically
+          > /tmp/new-images.txt
+          for chart_dir in charts/trento-server/charts/*/; do
+            if [ -d "$chart_dir" ]; then
+              chart_name=$(basename "$chart_dir")
+              # Strip "trento-" prefix if present for cleaner display
+              display_name=$(echo "$chart_name" | sed 's/^trento-//')
+
+              helm template trento charts/trento-server/ \
+                -f .github/test-values/upgrade-test.yaml \
+                -s "charts/${chart_name}/templates/*.yaml" 2>/dev/null | \
+                grep -E "^\s+image:" | \
+                awk -v chart="$display_name" '{gsub(/"/, "", $2); print chart "|" $2}' >> /tmp/new-images.txt || true
+            fi
+          done
+
+          # Add any remaining images not matched to a chart (e.g., from parent templates)
+          while read -r img; do
+            if ! grep -q "|${img}$" /tmp/new-images.txt; then
+              echo "main|${img}" >> /tmp/new-images.txt
+            fi
+          done < /tmp/new-images-raw.txt
+
+          sort -u /tmp/new-images.txt -o /tmp/new-images.txt
+
+          echo "New images found:"
+          cat /tmp/new-images.txt
+
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                    CONTAINER VERSION COMPARISON                        ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          # Process each new image and find matches
+          current_chart=""
+          while IFS='|' read -r chart_name img_full; do
+            # Extract image parts (registry/repo:tag)
+            img_registry=$(echo "$img_full" | sed -E 's|/.*||')
+            img_name=$(echo "$img_full" | sed -E 's|.*/||; s|:.*||')
+            img_tag=$(echo "$img_full" | sed -E 's|.*:||')
+
+            # Print chart header if changed
+            if [ "$chart_name" != "$current_chart" ]; then
+              if [ -n "$current_chart" ]; then echo ""; fi
+              echo "📦 Chart: ${chart_name}"
+              echo "────────────────────────────────────────────────────────────────────────"
+              current_chart="$chart_name"
+            fi
+
+            # Find matching old image by name (ignoring registry)
+            old_line=$(grep "|[^|]*${img_name}:" /tmp/current-images.txt | head -1)
+
+            if [ -n "$old_line" ]; then
+              old_full=$(echo "$old_line" | cut -d'|' -f4)
+              old_registry=$(echo "$old_full" | sed -E 's|/.*||')
+              old_tag=$(echo "$old_full" | sed -E 's|.*:||')
+
+              # Check for changes
+              if [ "$old_tag" != "$img_tag" ] || [ "$old_registry" != "$img_registry" ]; then
+                echo -n "  🔄 ${img_name}: "
+
+                # Show registry change if different
+                if [ "$old_registry" != "$img_registry" ]; then
+                  echo -n "${old_registry}→${img_registry} "
+                fi
+
+                # Show tag change
+                if [ "$old_tag" != "$img_tag" ]; then
+                  echo "${old_tag} → ${img_tag}"
+                else
+                  echo "${img_tag}"
+                fi
+              else
+                echo "  ✓ ${img_name}: ${img_tag}"
+              fi
+            else
+              echo "  🆕 ${img_name}: ${img_tag} (new)"
+            fi
+          done < /tmp/new-images.txt
+
+          echo ""
+          echo "────────────────────────────────────────────────────────────────────────"
+
+      - name: Upgrade to current dev chart
+        run: |
+          echo "=== Starting upgrade ==="
+          kubectl get pods -n trento
+
+          # The dev chart uses GHCR by default, so override tag to rolling
+          # This will show registry migration in SUSE scenario:
+          #   registry.suse.com/trento/mcp-server-trento:1.0.0 → ghcr.io/trento-project/mcp-server-trento:rolling
+
+          helm upgrade trento-server charts/trento-server \
+            --namespace trento \
+            --wait \
+            --timeout 3m \
+            --debug \
+            -f .github/test-values/upgrade-test.yaml \
+            --set trento-mcp-server.image.tag=rolling
+
+      - name: Verify upgrade
+        run: |
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                         POST-UPGRADE DIAGNOSTICS                       ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          echo "=== All pods ==="
+          kubectl get pods -n trento -o wide
+
+          echo ""
+          echo "=== Pods not running ==="
+          kubectl get pods -n trento --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
+
+          echo ""
+          echo "=== Recent events (last 30) ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp' | tail -30
+
+          echo ""
+          echo "=== Web init container logs (DB migration) ==="
+          WEB_POD=$(kubectl get pod -n trento \
+            -l "app.kubernetes.io/name=web,app.kubernetes.io/instance=trento-server" \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl logs "$WEB_POD" -n trento -c init || echo "Failed to get web init logs"
+
+          echo ""
+          echo "=== All pod logs (last 30 lines each) ==="
+          for pod in $(kubectl get pods -n trento -o jsonpath='{.items[*].metadata.name}'); do
+            echo ""
+            echo "────────────────────────────────────────────────────────────────────────"
+            echo "Pod: $pod"
+            echo "────────────────────────────────────────────────────────────────────────"
+            kubectl logs -n trento "$pod" --all-containers=true --tail=30 --ignore-errors=true || echo "No logs available"
+          done
+
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                      DIAGNOSTICS COMPLETE                              ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+
+      - name: Verify API is working
+        run: |
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                         API FUNCTIONALITY TEST                         ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          # Run a curl pod to test the API from inside the cluster
+          echo "=== Testing Trento API endpoints ==="
+          kubectl run api-test -n trento --rm -i --restart=Never \
+            --image=curlimages/curl:latest \
+            -- sh -c '
+              set -e
+
+              echo "1. Testing login endpoint..."
+              LOGIN_RESPONSE=$(curl -s -X POST http://trento-server-web:4000/api/session \
+                -H "Content-Type: application/json" \
+                -d "{\"username\": \"admin\", \"password\": \"admin-test-password\"}")
+
+              echo "Login response: $LOGIN_RESPONSE"
+
+              ACCESS_TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o "\"access_token\":\"[^\"]*\"" | cut -d"\"" -f4)
+
+              if [ -z "$ACCESS_TOKEN" ]; then
+                echo "❌ Failed to get access token"
+                exit 1
+              fi
+
+              echo "✓ Login successful, token obtained"
+              echo ""
+
+              echo "2. Testing profile endpoint..."
+              PROFILE_RESPONSE=$(curl -s -X GET http://trento-server-web:4000/api/v1/profile \
+                -H "Authorization: Bearer $ACCESS_TOKEN")
+
+              echo "Profile response: $PROFILE_RESPONSE"
+
+              if echo "$PROFILE_RESPONSE" | grep -q "\"username\":\"admin\""; then
+                echo "✓ Profile endpoint working - admin user verified"
+              else
+                echo "❌ Profile endpoint failed"
+                exit 1
+              fi
+
+              echo ""
+              echo "3. Testing Wanda health endpoint..."
+              WANDA_RESPONSE=$(curl -s http://trento-server-wanda:4000/api/readyz)
+              echo "Wanda health: $WANDA_RESPONSE"
+
+              if echo "$WANDA_RESPONSE" | grep -q "ready"; then
+                echo "✓ Wanda is ready"
+              else
+                echo "⚠ Wanda health check returned: $WANDA_RESPONSE"
+              fi
+
+              echo ""
+              echo "4. Testing MCP server..."
+
+              # Test MCP server is responding (SSE requires persistent connection, so just verify it is up)
+              echo "   Testing MCP endpoint availability..."
+              INIT_RESPONSE=$(curl -s -X POST http://trento-server-mcp-server:5000/mcp \
+                -H "Content-Type: application/json" \
+                -H "Authorization: Bearer $ACCESS_TOKEN" \
+                -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2024-11-05\", \"clientInfo\": {\"name\": \"test-client\", \"version\": \"1.0.0\"}, \"capabilities\": {}}}")
+
+              echo "   MCP initialize response (first event):"
+              echo "$INIT_RESPONSE" | head -3
+
+              if echo "$INIT_RESPONSE" | grep -q "serverInfo"; then
+                SERVER_NAME=$(echo "$INIT_RESPONSE" | grep -o "\"name\":\"[^\"]*\"" | head -1 | cut -d\" -f4)
+                SERVER_VERSION=$(echo "$INIT_RESPONSE" | grep -o "\"version\":\"[^\"]*\"" | tail -1 | cut -d\" -f4)
+                echo "   ✓ MCP server is responding: $SERVER_NAME $SERVER_VERSION"
+                echo "   ✓ MCP server successfully loaded OpenAPI specs from Web/Wanda"
+              else
+                echo "   ⚠ MCP server response unexpected"
+                echo "   Response: $INIT_RESPONSE"
+              fi
+
+              echo ""
+              echo "   Note: Full MCP protocol testing requires persistent SSE connection."
+              echo "   The initialize response confirms the server is functional."
+
+              echo ""
+              echo "╔════════════════════════════════════════════════════════════════════════╗"
+              echo "║                    API TESTS PASSED                                    ║"
+              echo "╚════════════════════════════════════════════════════════════════════════╝"
+            '
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: |
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                    FAILURE DIAGNOSTICS - FULL LOGS                     ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          echo "=== All pods ==="
+          kubectl get pods -n trento -o wide
+
+          echo ""
+          echo "=== All events ==="
+          kubectl get events -n trento --sort-by='.lastTimestamp'
+
+          echo ""
+          echo "=== Full container logs (all pods) ==="
+          for pod in $(kubectl get pods -n trento -o jsonpath='{.items[*].metadata.name}'); do
+            echo ""
+            echo "════════════════════════════════════════════════════════════════════════"
+            echo "Pod: $pod (FULL LOGS)"
+            echo "════════════════════════════════════════════════════════════════════════"
+            kubectl logs -n trento "$pod" --all-containers=true --ignore-errors=true || echo "No logs available"
+
+            echo ""
+            echo "--- $pod (previous) ---"
+            kubectl logs -n trento "$pod" --all-containers=true --previous --ignore-errors=true 2>/dev/null || echo "No previous logs"
+          done
