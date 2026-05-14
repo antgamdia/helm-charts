@@ -1,9 +1,9 @@
 # SPDX-FileCopyrightText: SUSE LLC
 # SPDX-License-Identifier: Apache-2.0
 
-# Minimal values for chart upgrade testing in a kind cluster.
+# Minimal values for chart upgrade testing in k3s.
 # Disables components not required for DB migration validation,
-# and adjusts service types for a cluster without a cloud load-balancer.
+# and adjusts service types for a test cluster.
 
 trento-wanda:
   enabled: false
@@ -13,6 +13,10 @@ trento-mcp-server:
 
 prometheus:
   enabled: false
+
+trento-web:
+  ingress:
+    enabled: false
 
 rabbitmq:
   service:

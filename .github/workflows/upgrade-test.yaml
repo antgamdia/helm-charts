@@ -89,15 +89,13 @@ jobs:
             -u ${{ github.actor }} \
             --password-stdin
 
-      - name: Create kind cluster
-        uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
-
-      - name: Login to GHCR (OSS sources only)
-        if: contains(steps.source.outputs.source, 'oss')
+      - name: Create k3s cluster
         run: |
-          echo ${{ github.token }} | helm registry login ghcr.io \
-            -u ${{ github.actor }} \
-            --password-stdin
+          curl -sfL https://get.k3s.io | sh -
+          mkdir -p ~/.kube
+          sudo cp /etc/rancher/k3s/k3s.yaml ~/.kube/config
+          sudo chown $(id -u):$(id -g) ~/.kube/config
+          kubectl wait --for=condition=ready node --all --timeout=300s
 
       - name: Install chart from ${{ steps.source.outputs.source }}
         run: |
