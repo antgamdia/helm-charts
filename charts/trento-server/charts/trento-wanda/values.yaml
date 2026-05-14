@@ -38,7 +38,7 @@ postgresql:
   image:
     registry: registry.suse.com
     repository: suse/postgres
-    tag: "14"
+    tag: "18.3"
 
 checks:
   image:
