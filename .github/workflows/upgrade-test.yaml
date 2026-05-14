@@ -88,12 +88,14 @@ jobs:
           echo "version=${resolved_version}" >> "$GITHUB_OUTPUT"
           echo "Resolved: ${source} → ${resolved_version}"
 
-      - name: Login to GHCR (OSS sources only)
+      - name: Verify GHCR chart access (OSS sources only)
         if: contains(steps.source.outputs.source, 'oss')
         run: |
-          echo ${{ github.token }} | helm registry login ghcr.io \
-            -u ${{ github.actor }} \
-            --password-stdin
+          echo "Verifying access to oci://${{ steps.source.outputs.registry }}:${{ steps.source.outputs.version }}"
+          helm pull oci://${{ steps.source.outputs.registry }} \
+            --version "${{ steps.source.outputs.version }}" \
+            --destination /tmp/
+          echo "✓ Chart is accessible without authentication"
 
       - name: Create k3s cluster
         uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
@@ -125,26 +127,74 @@ jobs:
             --timeout 10m \
             -f .github/test-values/upgrade-test.yaml
 
-      - name: Extract and display container versions (before upgrade)
+      - name: Build chart dependencies
         run: |
-          echo "=== Current deployed images ==="
-          kubectl get pods -n trento -o jsonpath='{range .items[*]}{"\n"}{.metadata.name}:{range .spec.containers[*]}{"\n  "}{.name}: {.image}{end}{range .spec.initContainers[*]}{"\n  "}{.name} (init): {.image}{end}{end}' | grep -v "^$"
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm dependency build charts/trento-server
 
-      - name: Extract container versions from new chart
+      - name: Compare container versions (before upgrade)
         run: |
-          echo "=== Images in new chart template ==="
+          echo "=== Extracting current deployed images ==="
+          kubectl get pods -n trento -o json | \
+            jq -r '
+              .items[] |
+              (.spec.initContainers // [])[] as $c |
+              "\($c.name):\($c.image)"
+            ' | sort -u > /tmp/current-images.txt
+
+          kubectl get pods -n trento -o json | \
+            jq -r '
+              .items[] |
+              (.spec.containers // [])[] as $c |
+              "\($c.name):\($c.image)"
+            ' | sort -u >> /tmp/current-images.txt
+
+          echo "=== Extracting new chart images ==="
           helm template trento charts/trento-server/ \
             -f .github/test-values/upgrade-test.yaml \
             | grep -E "^\s+image:" \
             | awk '{print $2}' \
             | tr -d '"' \
-            | sort -u
+            | sort -u > /tmp/new-images.txt
+
+          echo ""
+          echo "╔════════════════════════════════════════════════════════════════════════╗"
+          echo "║                    CONTAINER VERSION COMPARISON                        ║"
+          echo "╚════════════════════════════════════════════════════════════════════════╝"
+          echo ""
+
+          # Parse image names and compare
+          while IFS= read -r new_img; do
+            base_img=$(echo "$new_img" | sed -E 's/:[^:]*$//')
+            new_tag=$(echo "$new_img" | sed -E 's/.*://')
+
+            # Find matching old image
+            old_img=$(grep -E "^[^:]+:${base_img}:" /tmp/current-images.txt | head -1 | cut -d: -f2-)
+            if [ -z "$old_img" ]; then
+              old_img=$(grep "${base_img##*/}:" /tmp/current-images.txt | head -1 | cut -d: -f2-)
+            fi
+
+            if [ -n "$old_img" ]; then
+              old_tag=$(echo "$old_img" | sed -E 's/.*://')
+              img_name=$(echo "$base_img" | sed -E 's|.*/||')
+
+              if [ "$old_tag" != "$new_tag" ]; then
+                echo "🔄 UPGRADE: ${img_name}"
+                echo "   FROM: ${old_tag}"
+                echo "   TO:   ${new_tag}"
+                echo ""
+              else
+                echo "✓ NO CHANGE: ${img_name}:${new_tag}"
+                echo ""
+              fi
+            else
+              echo "🆕 NEW: ${new_img}"
+              echo ""
+            fi
+          done < /tmp/new-images.txt
 
       - name: Upgrade to current dev chart
         run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-          helm dependency build charts/trento-server
-
           echo "=== Starting upgrade ==="
           kubectl get pods -n trento
 
