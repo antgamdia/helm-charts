@@ -30,6 +30,12 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
+      - name: Login to GHCR
+        run: |
+          echo ${{ github.token }} | helm registry login ghcr.io \
+            -u ${{ github.actor }} \
+            --password-stdin
+
       - name: Resolve from-version
         id: from-version
         env:
