@@ -23,7 +23,7 @@ global:
     image:
       registry: registry.suse.com
       repository: suse/postgres
-      tag: "14"
+      tag: "18.3"
   prometheus:
     name: prometheus-server
     pathPrefix: /prometheus
