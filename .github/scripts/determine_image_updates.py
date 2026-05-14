@@ -68,7 +68,10 @@ def parse_version_from_tag(tag, suffix_pattern=None):
     if suffix_pattern:
         match = re.match(rf'^([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?){suffix_pattern}', tag)
         if match:
-            return match.group(1), suffix_pattern
+            version_str = match.group(1)
+            # Extract the actual suffix from the tag (not the pattern)
+            suffix = tag[len(version_str):]
+            return version_str, suffix
 
     # Try to extract version from start of tag
     match = re.match(r'^([0-9]+\.[0-9]+(?:\.[0-9]+)?(?:\.[0-9]+)?)', tag)
