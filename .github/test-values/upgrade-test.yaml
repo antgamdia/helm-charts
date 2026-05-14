@@ -1,18 +1,20 @@
 # SPDX-FileCopyrightText: SUSE LLC
 # SPDX-License-Identifier: Apache-2.0
 
-# Minimal values for chart upgrade testing in k3s.
-# Disables components not required for DB migration validation,
-# and adjusts service types for a test cluster.
+# Full chart upgrade testing values for k3s.
+# Tests upgrade with all components enabled.
 
 trento-wanda:
-  enabled: false
+  enabled: true
 
 trento-mcp-server:
-  enabled: false
+  enabled: true
 
 prometheus:
-  enabled: false
+  enabled: true
+  server:
+    auth:
+      type: none
 
 trento-web:
   ingress:

@@ -30,6 +30,9 @@ jobs:
   upgrade-test:
     name: ${{ matrix.name }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     strategy:
       matrix:
         include:
@@ -37,14 +40,17 @@ jobs:
             source: suse-release
             registry: registry.suse.com/trento/trento-server
             version: ""
+            use_oci: true
           - name: "OSS latest release → current"
             source: oss-release
-            registry: ghcr.io/trento-project/helm-charts/trento-server
+            registry: ""
             version: ""
-          - name: "OSS main branch → current"
+            use_oci: false
+          - name: "OSS main branch (rolling) → current"
             source: oss-main
             registry: ghcr.io/trento-project/helm-charts/trento-server
             version: ""
+            use_oci: true
       fail-fast: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -71,7 +77,7 @@ jobs:
             resolved_version=$(skopeo list-tags "docker://${registry}" | \
               jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V | tail -1)
           elif [ "$source" == "oss-release" ]; then
-            # Get latest stable release tag from GitHub
+            # Get latest stable release tag from GitHub (will use tar.gz artifact)
             resolved_version=$(gh release list \
               --repo trento-project/helm-charts \
               --exclude-pre-releases \
@@ -79,30 +85,20 @@ jobs:
               --json tagName \
               --jq '.[0].tagName')
           else
-            # oss-main: use the chart version from Chart.yaml (OCI artifact tag in GHCR for rolling release)
+            # oss-main: use the chart version from Chart.yaml (OCI artifact tag in GHCR for rolling)
             resolved_version=$(grep '^version:' charts/trento-server/Chart.yaml | awk '{print $2}')
           fi
 
           echo "source=${source}" >> "$GITHUB_OUTPUT"
           echo "registry=${registry}" >> "$GITHUB_OUTPUT"
           echo "version=${resolved_version}" >> "$GITHUB_OUTPUT"
-          echo "Resolved: ${source} → ${resolved_version}"
+          echo "use_oci=${{ matrix.use_oci }}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${source} → ${resolved_version} (use_oci=${{ matrix.use_oci }})"
 
       - name: Login to GHCR (OSS sources only)
         if: contains(steps.source.outputs.source, 'oss')
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Logging in to GHCR..."
-          echo "${GHCR_TOKEN}" | helm registry login ghcr.io \
-            -u ${{ github.actor }} \
-            --password-stdin
-
-          echo "Verifying access to oci://${{ steps.source.outputs.registry }}:${{ steps.source.outputs.version }}"
-          helm pull oci://${{ steps.source.outputs.registry }} \
-            --version "${{ steps.source.outputs.version }}" \
-            --destination /tmp/
-          echo "✓ Chart is accessible"
+          echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
       - name: Create k3s cluster
         uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
@@ -124,15 +120,40 @@ jobs:
         continue-on-error: true
 
       - name: Install chart from ${{ steps.source.outputs.source }}
+        env:
+          VERSION: ${{ steps.source.outputs.version }}
+          REGISTRY: ${{ steps.source.outputs.registry }}
+          USE_OCI: ${{ steps.source.outputs.use_oci }}
         run: |
-          helm install trento-server \
-            oci://${{ steps.source.outputs.registry }} \
-            --version "${{ steps.source.outputs.version }}" \
-            --namespace trento \
-            --create-namespace \
-            --wait \
-            --timeout 10m \
-            -f .github/test-values/upgrade-test.yaml
+          if [ "$USE_OCI" == "true" ]; then
+            # Install from OCI registry
+            echo "Installing from OCI: ${REGISTRY}:${VERSION}"
+            helm install trento-server \
+              oci://${REGISTRY} \
+              --version "${VERSION}" \
+              --namespace trento \
+              --create-namespace \
+              --wait \
+              --timeout 10m \
+              -f .github/test-values/upgrade-test.yaml
+          else
+            # Download and install from GitHub release tar.gz
+            echo "Downloading chart from GitHub release: ${VERSION}"
+            wget -q https://github.com/trento-project/helm-charts/archive/refs/tags/${VERSION}.tar.gz
+            tar -xzf ${VERSION}.tar.gz
+
+            cd helm-charts-${VERSION}/charts/trento-server
+            helm dependency update
+
+            helm install trento-server . \
+              --namespace trento \
+              --create-namespace \
+              --wait \
+              --timeout 10m \
+              -f ../../../.github/test-values/upgrade-test.yaml
+
+            cd ../../..
+          fi
 
       - name: Build chart dependencies
         run: |
@@ -200,39 +221,52 @@ jobs:
           echo "╚════════════════════════════════════════════════════════════════════════╝"
           echo ""
 
-          # Group by chart and compare
+          # Process each new image and find matches
           current_chart=""
           while IFS='|' read -r chart_name img_full; do
-            # Extract image parts
-            img_base=$(echo "$img_full" | sed -E 's/:[^:]*$//')
-            img_tag=$(echo "$img_full" | sed -E 's/.*://')
-            img_short=$(echo "$img_base" | sed -E 's|.*/||')
+            # Extract image parts (registry/repo:tag)
+            img_registry=$(echo "$img_full" | sed -E 's|/.*||')
+            img_name=$(echo "$img_full" | sed -E 's|.*/||; s|:.*||')
+            img_tag=$(echo "$img_full" | sed -E 's|.*:||')
 
             # Print chart header if changed
-            if [ "$chart_name" != "$current_chart" ] && [ "$chart_name" != "unknown" ]; then
+            if [ "$chart_name" != "$current_chart" ]; then
               if [ -n "$current_chart" ]; then echo ""; fi
               echo "📦 Chart: ${chart_name}"
               echo "────────────────────────────────────────────────────────────────────────"
               current_chart="$chart_name"
             fi
 
-            # Find matching old image (try exact match first, then fuzzy)
-            old_full=$(grep "|.*${img_base}:" /tmp/current-images.txt | head -1 | cut -d'|' -f4)
-            if [ -z "$old_full" ]; then
-              old_full=$(grep "|.*${img_short}:" /tmp/current-images.txt | head -1 | cut -d'|' -f4)
-            fi
+            # Find matching old image by name (ignoring registry)
+            old_line=$(grep "|[^|]*${img_name}:" /tmp/current-images.txt | head -1)
 
-            if [ -n "$old_full" ]; then
-              old_tag=$(echo "$old_full" | sed -E 's/.*://')
-              if [ "$old_tag" != "$img_tag" ]; then
-                echo "  🔄 ${img_short}: ${old_tag} → ${img_tag}"
+            if [ -n "$old_line" ]; then
+              old_full=$(echo "$old_line" | cut -d'|' -f4)
+              old_registry=$(echo "$old_full" | sed -E 's|/.*||')
+              old_tag=$(echo "$old_full" | sed -E 's|.*:||')
+
+              # Check for changes
+              if [ "$old_tag" != "$img_tag" ] || [ "$old_registry" != "$img_registry" ]; then
+                echo -n "  🔄 ${img_name}: "
+
+                # Show registry change if different
+                if [ "$old_registry" != "$img_registry" ]; then
+                  echo -n "${old_registry}→${img_registry} "
+                fi
+
+                # Show tag change
+                if [ "$old_tag" != "$img_tag" ]; then
+                  echo "${old_tag} → ${img_tag}"
+                else
+                  echo "${img_tag}"
+                fi
               else
-                echo "  ✓ ${img_short}: ${img_tag}"
+                echo "  ✓ ${img_name}: ${img_tag}"
               fi
             else
-              echo "  🆕 ${img_short}: ${img_tag} (new)"
+              echo "  🆕 ${img_name}: ${img_tag} (new)"
             fi
-          done < /tmp/new-images.txt | sort -u
+          done < /tmp/new-images.txt
 
           echo ""
           echo "────────────────────────────────────────────────────────────────────────"
