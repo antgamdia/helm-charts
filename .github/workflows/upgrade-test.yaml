@@ -63,7 +63,7 @@ jobs:
           elif [ "$source" == "suse-release" ]; then
             # List tags from SUSE registry, filter semantic versions, get latest
             resolved_version=$(skopeo list-tags "docker://${registry}" | \
-              jq -r '.Tags | map(select(test("^[0-9]+\\.[0-9]+\\.[0-9]+"))) | sort -V | .[-1]')
+              jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V | tail -1)
           elif [ "$source" == "oss-release" ]; then
             # Get latest stable release tag from GitHub
             resolved_version=$(gh release list \
@@ -91,6 +91,13 @@ jobs:
 
       - name: Create kind cluster
         uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc # v1.14.0
+
+      - name: Login to GHCR (OSS sources only)
+        if: contains(steps.source.outputs.source, 'oss')
+        run: |
+          echo ${{ github.token }} | helm registry login ghcr.io \
+            -u ${{ github.actor }} \
+            --password-stdin
 
       - name: Install chart from ${{ steps.source.outputs.source }}
         run: |
