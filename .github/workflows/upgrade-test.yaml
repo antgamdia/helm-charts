@@ -88,14 +88,21 @@ jobs:
           echo "version=${resolved_version}" >> "$GITHUB_OUTPUT"
           echo "Resolved: ${source} → ${resolved_version}"
 
-      - name: Verify GHCR chart access (OSS sources only)
+      - name: Login to GHCR (OSS sources only)
         if: contains(steps.source.outputs.source, 'oss')
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          echo "Logging in to GHCR..."
+          echo "${GHCR_TOKEN}" | helm registry login ghcr.io \
+            -u ${{ github.actor }} \
+            --password-stdin
+
           echo "Verifying access to oci://${{ steps.source.outputs.registry }}:${{ steps.source.outputs.version }}"
           helm pull oci://${{ steps.source.outputs.registry }} \
             --version "${{ steps.source.outputs.version }}" \
             --destination /tmp/
-          echo "✓ Chart is accessible without authentication"
+          echo "✓ Chart is accessible"
 
       - name: Create k3s cluster
         uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
@@ -141,38 +148,51 @@ jobs:
               .items[] |
               .metadata.labels."app.kubernetes.io/name" as $chart |
               (
-                (.spec.initContainers // [])[] |
-                "\($chart)|\($c.name)|init|\(.image)"
-              ),
-              (
-                (.spec.containers // [])[] |
-                "\($chart)|\(.name)|container|\(.image)"
+                ((.spec.initContainers // [])[] |
+                "\($chart)|\(.name)|init|\(.image)"),
+                ((.spec.containers // [])[] |
+                "\($chart)|\(.name)|container|\(.image)")
               )
             ' | sort > /tmp/current-images.txt
 
-          echo "=== Extracting new chart images ==="
-          # Get all images from helm template with context
-          helm template trento charts/trento-server/ \
-            -f .github/test-values/upgrade-test.yaml \
-            -s templates/*.yaml \
-            -s charts/*/templates/*.yaml 2>/dev/null | \
-            grep -B 20 "image:" | \
-            grep -E "(kind:|name:|image:)" | \
-            awk '
-              /kind:/ { kind=$2 }
-              /name:/ && kind { name=$2; chart=name }
-              /image:/ {
-                gsub(/"/, "", $2)
-                print chart "|" $2
-              }
-            ' | sort -u > /tmp/new-images.txt
+          echo "Current images found:"
+          cat /tmp/current-images.txt
 
-          # Also extract from values to catch any we missed
+          echo "=== Extracting new chart images ==="
+          # Extract all images from rendered templates
           helm template trento charts/trento-server/ \
             -f .github/test-values/upgrade-test.yaml | \
             grep -E "^\s+image:" | \
-            awk '{gsub(/"/, "", $2); print "unknown|" $2}' | \
-            sort -u >> /tmp/new-images.txt
+            awk '{gsub(/"/, "", $2); print $2}' | \
+            sort -u > /tmp/new-images-raw.txt
+
+          # Discover all subcharts dynamically
+          > /tmp/new-images.txt
+          for chart_dir in charts/trento-server/charts/*/; do
+            if [ -d "$chart_dir" ]; then
+              chart_name=$(basename "$chart_dir")
+              # Strip "trento-" prefix if present for cleaner display
+              display_name=$(echo "$chart_name" | sed 's/^trento-//')
+
+              helm template trento charts/trento-server/ \
+                -f .github/test-values/upgrade-test.yaml \
+                -s "charts/${chart_name}/templates/*.yaml" 2>/dev/null | \
+                grep -E "^\s+image:" | \
+                awk -v chart="$display_name" '{gsub(/"/, "", $2); print chart "|" $2}' >> /tmp/new-images.txt || true
+            fi
+          done
+
+          # Add any remaining images not matched to a chart (e.g., from parent templates)
+          while read -r img; do
+            if ! grep -q "|${img}$" /tmp/new-images.txt; then
+              echo "main|${img}" >> /tmp/new-images.txt
+            fi
+          done < /tmp/new-images-raw.txt
+
+          sort -u /tmp/new-images.txt -o /tmp/new-images.txt
+
+          echo "New images found:"
+          cat /tmp/new-images.txt
 
           echo ""
           echo "╔════════════════════════════════════════════════════════════════════════╗"
