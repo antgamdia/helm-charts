@@ -135,27 +135,44 @@ jobs:
       - name: Compare container versions (before upgrade)
         run: |
           echo "=== Extracting current deployed images ==="
+          # Get all containers and init containers with their pod context
           kubectl get pods -n trento -o json | \
             jq -r '
               .items[] |
-              (.spec.initContainers // [])[] as $c |
-              "\($c.name):\($c.image)"
-            ' | sort -u > /tmp/current-images.txt
-
-          kubectl get pods -n trento -o json | \
-            jq -r '
-              .items[] |
-              (.spec.containers // [])[] as $c |
-              "\($c.name):\($c.image)"
-            ' | sort -u >> /tmp/current-images.txt
+              .metadata.labels."app.kubernetes.io/name" as $chart |
+              (
+                (.spec.initContainers // [])[] |
+                "\($chart)|\($c.name)|init|\(.image)"
+              ),
+              (
+                (.spec.containers // [])[] |
+                "\($chart)|\(.name)|container|\(.image)"
+              )
+            ' | sort > /tmp/current-images.txt
 
           echo "=== Extracting new chart images ==="
+          # Get all images from helm template with context
           helm template trento charts/trento-server/ \
             -f .github/test-values/upgrade-test.yaml \
-            | grep -E "^\s+image:" \
-            | awk '{print $2}' \
-            | tr -d '"' \
-            | sort -u > /tmp/new-images.txt
+            -s templates/*.yaml \
+            -s charts/*/templates/*.yaml 2>/dev/null | \
+            grep -B 20 "image:" | \
+            grep -E "(kind:|name:|image:)" | \
+            awk '
+              /kind:/ { kind=$2 }
+              /name:/ && kind { name=$2; chart=name }
+              /image:/ {
+                gsub(/"/, "", $2)
+                print chart "|" $2
+              }
+            ' | sort -u > /tmp/new-images.txt
+
+          # Also extract from values to catch any we missed
+          helm template trento charts/trento-server/ \
+            -f .github/test-values/upgrade-test.yaml | \
+            grep -E "^\s+image:" | \
+            awk '{gsub(/"/, "", $2); print "unknown|" $2}' | \
+            sort -u >> /tmp/new-images.txt
 
           echo ""
           echo "╔════════════════════════════════════════════════════════════════════════╗"
@@ -163,35 +180,42 @@ jobs:
           echo "╚════════════════════════════════════════════════════════════════════════╝"
           echo ""
 
-          # Parse image names and compare
-          while IFS= read -r new_img; do
-            base_img=$(echo "$new_img" | sed -E 's/:[^:]*$//')
-            new_tag=$(echo "$new_img" | sed -E 's/.*://')
+          # Group by chart and compare
+          current_chart=""
+          while IFS='|' read -r chart_name img_full; do
+            # Extract image parts
+            img_base=$(echo "$img_full" | sed -E 's/:[^:]*$//')
+            img_tag=$(echo "$img_full" | sed -E 's/.*://')
+            img_short=$(echo "$img_base" | sed -E 's|.*/||')
 
-            # Find matching old image
-            old_img=$(grep -E "^[^:]+:${base_img}:" /tmp/current-images.txt | head -1 | cut -d: -f2-)
-            if [ -z "$old_img" ]; then
-              old_img=$(grep "${base_img##*/}:" /tmp/current-images.txt | head -1 | cut -d: -f2-)
+            # Print chart header if changed
+            if [ "$chart_name" != "$current_chart" ] && [ "$chart_name" != "unknown" ]; then
+              if [ -n "$current_chart" ]; then echo ""; fi
+              echo "📦 Chart: ${chart_name}"
+              echo "────────────────────────────────────────────────────────────────────────"
+              current_chart="$chart_name"
             fi
 
-            if [ -n "$old_img" ]; then
-              old_tag=$(echo "$old_img" | sed -E 's/.*://')
-              img_name=$(echo "$base_img" | sed -E 's|.*/||')
+            # Find matching old image (try exact match first, then fuzzy)
+            old_full=$(grep "|.*${img_base}:" /tmp/current-images.txt | head -1 | cut -d'|' -f4)
+            if [ -z "$old_full" ]; then
+              old_full=$(grep "|.*${img_short}:" /tmp/current-images.txt | head -1 | cut -d'|' -f4)
+            fi
 
-              if [ "$old_tag" != "$new_tag" ]; then
-                echo "🔄 UPGRADE: ${img_name}"
-                echo "   FROM: ${old_tag}"
-                echo "   TO:   ${new_tag}"
-                echo ""
+            if [ -n "$old_full" ]; then
+              old_tag=$(echo "$old_full" | sed -E 's/.*://')
+              if [ "$old_tag" != "$img_tag" ]; then
+                echo "  🔄 ${img_short}: ${old_tag} → ${img_tag}"
               else
-                echo "✓ NO CHANGE: ${img_name}:${new_tag}"
-                echo ""
+                echo "  ✓ ${img_short}: ${img_tag}"
               fi
             else
-              echo "🆕 NEW: ${new_img}"
-              echo ""
+              echo "  🆕 ${img_short}: ${img_tag} (new)"
             fi
-          done < /tmp/new-images.txt
+          done < /tmp/new-images.txt | sort -u
+
+          echo ""
+          echo "────────────────────────────────────────────────────────────────────────"
 
       - name: Upgrade to current dev chart
         run: |
