@@ -325,16 +325,25 @@ jobs:
           echo "────────────────────────────────────────────────────────────────────────"
 
       - name: Upgrade to current dev chart
+        env:
+          SOURCE: ${{ steps.source.outputs.source }}
         run: |
           echo "=== Starting upgrade ==="
           kubectl get pods -n trento
 
+          # For OSS sources, use rolling tag for MCP server
+          OSS_IMAGE_OVERRIDES=""
+          if [[ "$SOURCE" == *"oss"* ]]; then
+            OSS_IMAGE_OVERRIDES="--set trento-mcp-server.image.tag=rolling"
+          fi
+
           helm upgrade trento-server charts/trento-server \
             --namespace trento \
             --wait \
-            --timeout 10m \
+            --timeout 3m \
             --debug \
-            -f .github/test-values/upgrade-test.yaml
+            -f .github/test-values/upgrade-test.yaml \
+            $OSS_IMAGE_OVERRIDES
 
       - name: Verify upgrade
         run: |
