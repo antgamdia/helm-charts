@@ -14,6 +14,10 @@ env:
   CERT_MANAGER_VERSION: v1.20.2 # https://github.com/cert-manager/cert-manager/releases
   HELM_VERSION: v4.2.0 # http://github.com/helm/helm/releases
 
+  SOURCE_SUSE_RELEASE: suse-release
+  SOURCE_OSS_RELEASE: oss-release
+  SOURCE_OSS_MAIN: oss-main
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -26,9 +30,6 @@ jobs:
       contents: read
       packages: read
     env:
-      SOURCE_SUSE_RELEASE: suse-release
-      SOURCE_OSS_RELEASE: oss-release
-      SOURCE_OSS_MAIN: oss-main
       SUSE_REGISTRY: registry.suse.com/trento/trento-server
       HELM_CHARTS_REPO: trento-project/helm-charts
       OSS_CHART_REGISTRY: ghcr.io/trento-project/helm-charts/trento-server
@@ -158,7 +159,7 @@ jobs:
           helm repo update
           helm dependency build charts/trento-server
 
-      - name: Compare container versions (before upgrade)
+      - name: Compare container versions
         run: bash .github/scripts/upgrade-test.sh compare-container-versions
 
       - name: Upgrade to current dev chart
