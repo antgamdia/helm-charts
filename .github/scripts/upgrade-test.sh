@@ -122,8 +122,7 @@ compare_container_versions() {
   cat /tmp/current-images.txt
 
   section "=== Extracting new chart images ==="
-  helm template trento "$CHART_DIR" \
-    -f "hack/cert-manager/override-values.yaml" | \
+  helm template trento "$CHART_DIR" ${HELM_COMMON_FLAGS} | \
     grep -E "^\s+image:" | \
     awk '{gsub(/"/, "", $2); print $2}' | \
     sort -u > /tmp/new-images-raw.txt
@@ -135,7 +134,7 @@ compare_container_versions() {
       display_name=$(echo "$chart_name" | sed 's/^trento-//')
 
       helm template trento "$CHART_DIR" \
-        -f "hack/cert-manager/override-values.yaml" \
+        ${HELM_COMMON_FLAGS} \
         -s "charts/${chart_name}/templates/*.yaml" 2>/dev/null | \
         grep -E "^\s+image:" | \
         awk -v chart="$display_name" '{gsub(/"/, "", $2); print chart "|" $2}' >> /tmp/new-images.txt || true
