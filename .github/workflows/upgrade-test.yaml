@@ -112,16 +112,27 @@ jobs:
             --namespace cert-manager \
             --create-namespace \
             --set crds.enabled=true
-        continue-on-error: true
+          kubectl wait --for=condition=available --timeout=300s \
+            deployment/cert-manager -n cert-manager
 
       - name: Prepare cert-manager resources and values for ingress
         run: |
-          envsubst < hack/cert-manager/cluster-issuer.tpl.yaml > hack/cert-manager/cluster-issuer.yaml
+          envsubst < helm-charts/hack/cert-manager/certificate.tpl.yaml > helm-charts/hack/cert-manager/certificate.yaml
           envsubst < hack/cert-manager/override-values.tpl.yaml > hack/cert-manager/override-values.yaml
 
-      - name: Apply ClusterIssuer
+      - name: Replace production issuer with self-signed issuer for testing
         run: |
-          kubectl apply -f hack/cert-manager/cluster-issuer.yaml
+          PROD_ISSUER=$(yq eval '.metadata.name' hack/cert-manager/cluster-issuer.tpl.yaml)
+          TEST_ISSUER=$(yq eval '.metadata.name' hack/cert-manager/selfsigned-issuer.yaml)
+
+          sed -i "s/${PROD_ISSUER}/${TEST_ISSUER}/g" hack/cert-manager/certificate.yaml
+          sed -i "s/${PROD_ISSUER}/${TEST_ISSUER}/g" hack/cert-manager/override-values.yaml
+
+      - name: Apply cert-manager resources
+        run: |
+          kubectl create namespace ${{ env.TRENTO_NAMESPACE }} || true
+          kubectl apply -f helm-charts/hack/cert-manager/cluster-issuer.yaml
+          kubectl apply -f helm-charts/hack/cert-manager/certificate.yaml
 
       - name: Login to GHCR
         if: contains(matrix.source, 'oss')
