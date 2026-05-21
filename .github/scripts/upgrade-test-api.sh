@@ -10,8 +10,16 @@ MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
 # For ingress testing, we need to accept self-signed certs
 CURL_OPTS="-s -k"
 
+section "=== Client TLS handshake ==="
+if command -v openssl >/dev/null 2>&1; then
+  echo "[TLS] Fetching certificate from ${INGRESS_HOST} using openssl"
+  openssl s_client -connect "${INGRESS_HOST}:443" -servername "${INGRESS_HOST}" -showcerts </dev/null 2>/dev/null | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' | openssl x509 -noout -text -dates -subject -issuer || echo "openssl s_client failed"
+  echo "[TLS] Fetching certificate from ${INGRESS_HOST} using curl"
+  curl -vkI "https://${INGRESS_HOST}" || true
+fi
+
 echo ""
-echo "1. Testing Web health endpoint..."
+section "1. Testing Web health endpoint..."
 WEB_RESPONSE=$(curl "$CURL_OPTS" "${WEB_BASE_URL}/api/readyz")
 echo "Web health: $WEB_RESPONSE"
 
@@ -21,7 +29,7 @@ else
   echo "⚠️ Web health check returned: $WEB_RESPONSE"
 fi
 
-echo "2. Testing profile endpoint..."
+section "2. Testing profile endpoint..."
 PROFILE_RESPONSE=$(curl "$CURL_OPTS" -X GET "${WEB_BASE_URL}/api/v1/profile" \
   -H "Authorization: Bearer $ACCESS_TOKEN")
 
@@ -34,7 +42,7 @@ else
   exit 1
 fi
 
-echo "3. Testing login endpoint..."
+section "3. Testing login endpoint..."
 LOGIN_RESPONSE=$(curl "$CURL_OPTS" -X POST "${WEB_BASE_URL}/api/session" \
   -H "Content-Type: application/json" \
   -d "{\"username\": \"admin\", \"password\": \"admin-test-password\"}")
@@ -52,7 +60,7 @@ echo "✅ Login successful, token obtained"
 echo ""
 
 echo ""
-echo "4. Testing Wanda health endpoint..."
+section "4. Testing Wanda health endpoint..."
 WANDA_RESPONSE=$(curl "$CURL_OPTS" "${WANDA_BASE_URL}/api/readyz")
 echo "Wanda health: $WANDA_RESPONSE"
 
@@ -63,7 +71,7 @@ else
 fi
 
 echo ""
-echo "4. Testing MCP server..."
+section "4. Testing MCP server..."
 
 echo "   Testing MCP endpoint availability..."
 INIT_RESPONSE=$(curl "$CURL_OPTS" -X POST "${MCP_BASE_URL}/mcp" \
@@ -85,7 +93,4 @@ fi
 
 echo ""
 
-
-echo "╔════════════════════════════════════════════════════════════════════════╗"
-echo "║                    API TESTS PASSED                                    ║"
-echo "╚════════════════════════════════════════════════════════════════════════╝"
+banner "                      API TESTS PASSED                              "

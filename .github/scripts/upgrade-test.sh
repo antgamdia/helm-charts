@@ -256,14 +256,6 @@ verify_api() {
     echo "Secret ${SECRET_NAME} not found in namespace ${TRENTO_NAMESPACE}"
   fi
 
-  section "=== Client TLS handshake ==="
-  if command -v openssl >/dev/null 2>&1; then
-    openssl s_client -connect "${ingress_host}:443" -servername "${ingress_host}" -showcerts </dev/null 2>/dev/null | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' | openssl x509 -noout -text -dates -subject -issuer || echo "openssl s_client failed"
-  else
-    echo "openssl not available; running curl -vkI to show TLS handshake"
-    curl -vkI "https://${ingress_host}" || true
-  fi
-
   # --- Run API e2e tests (separate script) ---
   INGRESS_HOST="$ingress_host" \
     bash "$REPO_ROOT/.github/scripts/upgrade-test-api.sh"
