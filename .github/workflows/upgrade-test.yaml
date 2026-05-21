@@ -44,6 +44,7 @@ jobs:
         --set trento-mcp-server.image.pullPolicy=Always
         --set global.trentoWeb.origin=trento-test.local
         --set prometheus.enabled=false
+        --set prometheus.server.auth.type=none
         -f hack/cert-manager/override-values.yaml
     strategy:
       matrix:
@@ -76,10 +77,14 @@ jobs:
               ;;
             oss-release)
               echo "  Querying GitHub releases for: ${HELM_CHARTS_REPO}"
-              RELEASES=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --json tagName --jq '.[].tagName')
+              RELEASES=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --limit 10 --json tagName --jq '.[].tagName')
               echo "  Available versions:"
               echo "$RELEASES" | sed 's/^/    /'
               VERSION=$(echo "$RELEASES" | head -1)
+              if [ -z "$VERSION" ]; then
+                echo "ERROR: No versions found for ${HELM_CHARTS_REPO}"
+                exit 1
+              fi
               ;;
             oss-main)
               echo "  Using rolling tag for OSS main branch"
@@ -125,6 +130,11 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.value }}
         run: |
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: VERSION is empty. Failed to resolve version in previous step."
+            exit 1
+          fi
+          echo "Downloading OSS release version: ${VERSION}"
           wget -q https://github.com/${HELM_CHARTS_REPO}/archive/refs/tags/${VERSION}.tar.gz
           tar -xzf ${VERSION}.tar.gz
           cd helm-charts-${VERSION}/charts/trento-server
@@ -146,7 +156,8 @@ jobs:
           helm upgrade -i trento-server "$CHART_REF" --wait \
             --version "${VERSION}" \
             --create-namespace \
-            --timeout 2m \
+            --timeout 3m \
+            --render-subchart-notes \
             ${HELM_COMMON_FLAGS}
 
       - name: Check pod status after install
@@ -167,6 +178,7 @@ jobs:
         run: |
           helm upgrade -i trento-server charts/trento-server --wait \
             --timeout 3m \
+            --render-subchart-notes \
             --debug \
             ${HELM_COMMON_FLAGS} \
             --set trento-web.image.tag=rolling \
