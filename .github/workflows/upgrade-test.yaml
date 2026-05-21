@@ -120,7 +120,7 @@ jobs:
         run: |
           kubectl apply -f hack/cert-manager/cluster-issuer.yaml
 
-      - name: Login to GHCR (OSS sources only)
+      - name: Login to GHCR
         if: contains(matrix.source, 'oss')
         run: |
           echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
@@ -144,17 +144,17 @@ jobs:
         run: |
           if [ "${{ matrix.source }}" = "suse-release" ]; then
             CHART_REF="oci://${SUSE_REGISTRY}"
-            VERSION="${{ steps.version.outputs.value }}"
+            VERSION_FLAG="--version ${{ steps.version.outputs.value }}"
           elif [ "${{ matrix.source }}" = "oss-release" ]; then
-            VERSION="${{ steps.version.outputs.value }}"
-            CHART_REF="helm-charts-${VERSION}/charts/trento-server"
+            CHART_REF="helm-charts-${{ steps.version.outputs.value }}/charts/trento-server"
+            VERSION_FLAG="--version ${{ steps.version.outputs.value }}"
           else
-            CHART_REF="oci://${OSS_CHART_REGISTRY}"
-            VERSION="rolling"
+            CHART_REF="oci://${OSS_CHART_REGISTRY}:rolling"
+            VERSION_FLAG=""
           fi
 
           helm upgrade -i trento-server "$CHART_REF" --wait \
-            --version "${VERSION}" \
+            ${VERSION_FLAG} \
             --create-namespace \
             --timeout 3m \
             --render-subchart-notes \

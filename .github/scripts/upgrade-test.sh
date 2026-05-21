@@ -169,7 +169,7 @@ compare_container_versions() {
       current_chart="$chart_name"
     fi
 
-    old_line=$(grep "|[^|]*${img_name}:" /tmp/current-images.txt | head -1)
+    old_line=$(grep "|[^|]*${img_name}:" /tmp/current-images.txt | head -1 || true)
 
     if [ -n "$old_line" ]; then
       old_full=$(echo "$old_line" | cut -d'|' -f4)
