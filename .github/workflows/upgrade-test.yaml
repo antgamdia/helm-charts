@@ -27,8 +27,8 @@ jobs:
       packages: read
     env:
       SUSE_REGISTRY: registry.suse.com/trento/trento-server
-      HELM_CHARTS_REPO: ${{ github.repository_owner }}/helm-charts
-      OSS_CHART_REGISTRY: ghcr.io/${{ github.repository_owner }}/helm-charts/trento-server
+      HELM_CHARTS_REPO: trento-project/helm-charts
+      OSS_CHART_REGISTRY: ghcr.io/trento-project/helm-charts/trento-server
       TRENTO_NAMESPACE: trento
       TRENTO_WEB_ORIGIN: trento-test.local
       TRENTO_WEB_PASSWORD: test-password-123
