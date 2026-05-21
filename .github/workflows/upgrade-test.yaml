@@ -54,11 +54,11 @@ jobs:
       matrix:
         include:
           - name: "SUSE latest release → current"
-            source: ${{ env.SOURCE_SUSE_RELEASE }}
+            source: suse-release
           - name: "OSS latest release → current"
-            source: ${{ env.SOURCE_OSS_RELEASE }}
+            source: oss-release
           - name: "OSS rolling → current"
-            source: ${{ env.SOURCE_OSS_MAIN }}
+            source: oss-main
       fail-fast: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
