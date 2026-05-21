@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+section() {
+  printf '\n%s\n' "$1"
+}
+
+banner() {
+  printf '%s\n' "╔════════════════════════════════════════════════════════════════════════╗"
+  printf '%s\n' "║$1║"
+  printf '%s\n' "╚════════════════════════════════════════════════════════════════════════╝"
+}
+
 # Test via ingress (TLS) by default, can override with localhost URLs
 INGRESS_HOST="${INGRESS_HOST:-trento-test.local}"
 WEB_BASE_URL="${WEB_BASE_URL:-https://${INGRESS_HOST}}"
