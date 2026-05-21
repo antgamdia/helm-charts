@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -226,7 +230,7 @@ verify_api() {
   kubectl get certificaterequest -n "$TRENTO_NAMESPACE" --sort-by='.metadata.creationTimestamp' -o wide 2>/dev/null || echo "No CertificateRequests found"
 
   INGRESS_HOST="$ingress_host" \
-    bash "$REPO_ROOT/.github/scripts/upgrade-test-api.sh"
+    bash "$REPO_ROOT/.github/scripts/helm-upgrade-smoke-test.sh"
 }
 
 show_web_init_logs() {

@@ -9,6 +9,10 @@ on:
       - "main"
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   K3S_VERSION: v1.36.1+k3s1 # https://hub.docker.com/r/rancher/k3s/tags
   CERT_MANAGER_VERSION: v1.20.2 # https://github.com/cert-manager/cert-manager/releases
@@ -17,10 +21,6 @@ env:
   SOURCE_SUSE_RELEASE: suse-release
   SOURCE_OSS_RELEASE: oss-release
   SOURCE_OSS_MAIN: oss-main
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   upgrade-test:
@@ -161,7 +161,7 @@ jobs:
 
       - name: Check pod status after install
         if: always()
-        run: bash .github/scripts/upgrade-test.sh post-install-diagnostics
+        run: bash .github/scripts/helm-upgrade-helper.sh post-install-diagnostics
 
       - name: Build dependencies for current dev chart
         run: |
@@ -171,7 +171,7 @@ jobs:
           helm dependency build charts/trento-server
 
       - name: Compare container versions
-        run: bash .github/scripts/upgrade-test.sh compare-container-versions
+        run: bash .github/scripts/helm-upgrade-helper.sh compare-container-versions
 
       - name: Upgrade to current dev chart
         run: |
@@ -186,11 +186,11 @@ jobs:
             --set trento-mcp-server.image.tag=rolling
 
       - name: Verify upgrade
-        run: bash .github/scripts/upgrade-test.sh post-upgrade-diagnostics
+        run: bash .github/scripts/helm-upgrade-helper.sh post-upgrade-diagnostics
 
       - name: Verify API is working
-        run: bash .github/scripts/upgrade-test.sh verify-api
+        run: bash .github/scripts/helm-upgrade-helper.sh verify-api
 
       - name: Dump diagnostics on failure
         if: failure()
-        run: bash .github/scripts/upgrade-test.sh failure-diagnostics
+        run: bash .github/scripts/helm-upgrade-helper.sh failure-diagnostics
