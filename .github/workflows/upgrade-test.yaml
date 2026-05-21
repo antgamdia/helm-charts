@@ -34,23 +34,6 @@ jobs:
       TRENTO_WEB_PASSWORD: test-password-123
       TRENTO_ADMIN_EMAIL: admin@trento-test.local
       TRENTO_INGRESS_CLASS: traefik
-      HELM_FLAGS: |
-        --namespace "${TRENTO_NAMESPACE}"
-        # Web
-        --set trento-web.adminUser.password="${TRENTO_WEB_PASSWORD}"
-        --set trento-web.image.pullPolicy=Always
-        # Wanda
-        --set trento-wanda.image.pullPolicy=Always
-        # Checks
-        --set trento-wanda.checks.image.pullPolicy=Always
-        # MCP Server
-        --set trento-mcp-server.enabled=true
-        --set trento-mcp-server.image.pullPolicy=Always
-        # Others
-        --set global.trentoWeb.origin="${TRENTO_WEB_ORIGIN}"
-        --set prometheus.enabled=false
-        # Ingress
-        -f hack/cert-manager/override-values.yaml
     strategy:
       matrix:
         include:
@@ -89,6 +72,7 @@ jobs:
         with:
           k3s-version: ${{ env.K3S_VERSION }}
           helm-version: ${{ env.HELM_VERSION }}
+          metrics-enabled: false
 
       - name: Install cert-manager
         run: |
@@ -99,7 +83,7 @@ jobs:
             --set crds.enabled=true
         continue-on-error: true
 
-      - name: Prepare cert-manager resources
+      - name: Prepare cert-manager resources and values for ingress
         run: |
           envsubst < hack/cert-manager/cluster-issuer.tpl.yaml > hack/cert-manager/cluster-issuer.yaml
           envsubst < hack/cert-manager/override-values.tpl.yaml > hack/cert-manager/override-values.yaml
@@ -135,7 +119,16 @@ jobs:
             --version "${VERSION}" \
             --create-namespace \
             --timeout 2m \
-            ${HELM_FLAGS}
+            --namespace trento \
+            --set trento-web.adminUser.password=admin-test-password \
+            --set trento-web.image.pullPolicy=Always \
+            --set trento-wanda.image.pullPolicy=Always \
+            --set trento-wanda.checks.image.pullPolicy=Always \
+            --set trento-mcp-server.enabled=true \
+            --set trento-mcp-server.image.pullPolicy=Always \
+            --set global.trentoWeb.origin=trento-test.local \
+            --set prometheus.enabled=false \
+            -f hack/cert-manager/override-values.yaml
 
       - name: Check pod status after install
         if: always()
@@ -153,7 +146,16 @@ jobs:
           helm upgrade -i trento-server charts/trento-server --wait \
             --timeout 3m \
             --debug \
-            ${HELM_FLAGS} \
+            --namespace trento \
+            --set trento-web.adminUser.password=admin-test-password \
+            --set trento-web.image.pullPolicy=Always \
+            --set trento-wanda.image.pullPolicy=Always \
+            --set trento-wanda.checks.image.pullPolicy=Always \
+            --set trento-mcp-server.enabled=true \
+            --set trento-mcp-server.image.pullPolicy=Always \
+            --set global.trentoWeb.origin=trento-test.local \
+            --set prometheus.enabled=false \
+            -f hack/cert-manager/override-values.yaml \
             --set trento-web.image.tag=rolling \
             --set trento-wanda.image.tag=rolling \
             --set trento-wanda.checks.image.tag=rolling \
