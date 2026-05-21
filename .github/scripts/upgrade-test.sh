@@ -214,12 +214,58 @@ verify_api() {
 
   if [ -n "$ingress_ip" ]; then
     echo "Ingress IP: $ingress_ip"
+    echo "Adding $ingress_ip $ingress_host to /etc/hosts"
+    echo "$ingress_ip $ingress_host" | sudo tee -a /etc/hosts > /dev/null
   else
     echo "Using ingress hostname: $ingress_host"
   fi
 
+  # --- Kubernetes-side TLS and cert-manager verification ---
+  local CERT_NAME="${CERT_NAME:-trento-certificate}"
+  local SECRET_NAME="${SECRET_NAME:-trento-tls}"
+  local CLUSTER_ISSUER="${CLUSTER_ISSUER:-letsencrypt-production}"
+
+  section "=== TLS / cert-manager checks ==="
+  echo "[TLS] cert-manager pods:"
+  kubectl get pods -n cert-manager -o wide || echo "cert-manager namespace or pods not found"
+
+  echo "[TLS] ClusterIssuer: ${CLUSTER_ISSUER}"
+  kubectl describe clusterissuer "$CLUSTER_ISSUER" 2>/dev/null || echo "ClusterIssuer ${CLUSTER_ISSUER} not found"
+
+  echo "[TLS] Certificate: ${CERT_NAME} (ns: ${TRENTO_NAMESPACE})"
+  kubectl describe certificate "$CERT_NAME" -n "$TRENTO_NAMESPACE" 2>/dev/null || echo "Certificate ${CERT_NAME} not found in ${TRENTO_NAMESPACE}"
+
+  echo "[TLS] Recent CertificateRequests (ns: ${TRENTO_NAMESPACE}):"
+  kubectl get certificaterequest -n "$TRENTO_NAMESPACE" --sort-by='.metadata.creationTimestamp' -o wide 2>/dev/null || echo "No CertificateRequests found"
+
+  echo "[TLS] Secret: ${SECRET_NAME} (ns: ${TRENTO_NAMESPACE})"
+  if kubectl get secret "$SECRET_NAME" -n "$TRENTO_NAMESPACE" >/dev/null 2>&1; then
+    kubectl get secret "$SECRET_NAME" -n "$TRENTO_NAMESPACE" -o yaml
+    if command -v openssl >/dev/null 2>&1; then
+      CRT_B64=$(kubectl get secret "$SECRET_NAME" -n "$TRENTO_NAMESPACE" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
+      if [ -n "$CRT_B64" ]; then
+        echo "[TLS] Decoded certificate details:"
+        echo "$CRT_B64" | base64 -d | openssl x509 -noout -text -dates -subject -issuer || echo "Failed to parse certificate"
+      else
+        echo "Secret does not contain tls.crt"
+      fi
+    else
+      echo "openssl not available locally; skipping certificate decode"
+    fi
+  else
+    echo "Secret ${SECRET_NAME} not found in namespace ${TRENTO_NAMESPACE}"
+  fi
+
+  section "=== Client TLS handshake ==="
+  if command -v openssl >/dev/null 2>&1; then
+    openssl s_client -connect "${ingress_host}:443" -servername "${ingress_host}" -showcerts </dev/null 2>/dev/null | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' | openssl x509 -noout -text -dates -subject -issuer || echo "openssl s_client failed"
+  else
+    echo "openssl not available; running curl -vkI to show TLS handshake"
+    curl -vkI "https://${ingress_host}" || true
+  fi
+
+  # --- Run API e2e tests (separate script) ---
   INGRESS_HOST="$ingress_host" \
-  INGRESS_IP="$ingress_ip" \
     bash "$REPO_ROOT/.github/scripts/upgrade-test-api.sh"
 }
 

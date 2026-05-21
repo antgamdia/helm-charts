@@ -3,19 +3,39 @@ set -euo pipefail
 
 # Test via ingress (TLS) by default, can override with localhost URLs
 INGRESS_HOST="${INGRESS_HOST:-trento-test.local}"
-INGRESS_IP="${INGRESS_IP:-}"
 WEB_BASE_URL="${WEB_BASE_URL:-https://${INGRESS_HOST}}"
 WANDA_BASE_URL="${WANDA_BASE_URL:-https://${INGRESS_HOST}/wanda}"
 MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
 
 # For ingress testing, we need to accept self-signed certs
-CURL_OPTS="-k"
-if [ -n "$INGRESS_IP" ]; then
-  CURL_OPTS="$CURL_OPTS --resolve ${INGRESS_HOST}:443:${INGRESS_IP}"
+CURL_OPTS="-s -k"
+
+echo ""
+echo "1. Testing Web health endpoint..."
+WEB_RESPONSE=$(curl "$CURL_OPTS" "${WEB_BASE_URL}/api/readyz")
+echo "Web health: $WEB_RESPONSE"
+
+if echo "$WEB_RESPONSE" | grep -q "ready"; then
+  echo "✅ Web is ready"
+else
+  echo "⚠️ Web health check returned: $WEB_RESPONSE"
 fi
 
-echo "1. Testing login endpoint..."
-LOGIN_RESPONSE=$(curl -s $CURL_OPTS -X POST "${WEB_BASE_URL}/api/session" \
+echo "2. Testing profile endpoint..."
+PROFILE_RESPONSE=$(curl "$CURL_OPTS" -X GET "${WEB_BASE_URL}/api/v1/profile" \
+  -H "Authorization: Bearer $ACCESS_TOKEN")
+
+echo "Profile response: $PROFILE_RESPONSE"
+
+if echo "$PROFILE_RESPONSE" | grep -q "\"username\":\"admin\""; then
+  echo "✅ Profile endpoint working - admin user verified"
+else
+  echo "❌ Profile endpoint failed"
+  exit 1
+fi
+
+echo "3. Testing login endpoint..."
+LOGIN_RESPONSE=$(curl "$CURL_OPTS" -X POST "${WEB_BASE_URL}/api/session" \
   -H "Content-Type: application/json" \
   -d "{\"username\": \"admin\", \"password\": \"admin-test-password\"}")
 
@@ -31,22 +51,9 @@ fi
 echo "✅ Login successful, token obtained"
 echo ""
 
-echo "2. Testing profile endpoint..."
-PROFILE_RESPONSE=$(curl -s $CURL_OPTS -X GET "${WEB_BASE_URL}/api/v1/profile" \
-  -H "Authorization: Bearer $ACCESS_TOKEN")
-
-echo "Profile response: $PROFILE_RESPONSE"
-
-if echo "$PROFILE_RESPONSE" | grep -q "\"username\":\"admin\""; then
-  echo "✅ Profile endpoint working - admin user verified"
-else
-  echo "❌ Profile endpoint failed"
-  exit 1
-fi
-
 echo ""
-echo "3. Testing Wanda health endpoint..."
-WANDA_RESPONSE=$(curl -s $CURL_OPTS "${WANDA_BASE_URL}/api/readyz")
+echo "4. Testing Wanda health endpoint..."
+WANDA_RESPONSE=$(curl "$CURL_OPTS" "${WANDA_BASE_URL}/api/readyz")
 echo "Wanda health: $WANDA_RESPONSE"
 
 if echo "$WANDA_RESPONSE" | grep -q "ready"; then
@@ -59,7 +66,7 @@ echo ""
 echo "4. Testing MCP server..."
 
 echo "   Testing MCP endpoint availability..."
-INIT_RESPONSE=$(curl -s $CURL_OPTS -X POST "${MCP_BASE_URL}/mcp" \
+INIT_RESPONSE=$(curl "$CURL_OPTS" -X POST "${MCP_BASE_URL}/mcp" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2024-11-05\", \"clientInfo\": {\"name\": \"test-client\", \"version\": \"1.0.0\"}, \"capabilities\": {}}}")
@@ -71,17 +78,14 @@ if echo "$INIT_RESPONSE" | grep -q "serverInfo"; then
   SERVER_NAME=$(echo "$INIT_RESPONSE" | grep -o "\"name\":\"[^\"]*\"" | head -1 | cut -d\" -f4)
   SERVER_VERSION=$(echo "$INIT_RESPONSE" | grep -o "\"version\":\"[^\"]*\"" | tail -1 | cut -d\" -f4)
   echo "   ✅ MCP server is responding: $SERVER_NAME $SERVER_VERSION"
-  echo "   ✅ MCP server successfully loaded OpenAPI specs from Web/Wanda"
 else
   echo "   ⚠️ MCP server response unexpected"
   echo "   Response: $INIT_RESPONSE"
 fi
 
 echo ""
-echo "   Note: Full MCP protocol testing requires persistent SSE connection."
-echo "   The initialize response confirms the server is functional."
 
-echo ""
+
 echo "╔════════════════════════════════════════════════════════════════════════╗"
 echo "║                    API TESTS PASSED                                    ║"
 echo "╚════════════════════════════════════════════════════════════════════════╝"
