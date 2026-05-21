@@ -20,14 +20,6 @@ MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
 # For ingress testing, we need to accept self-signed certs
 CURL_OPTS="-s -k"
 
-section "=== Client TLS handshake ==="
-if command -v openssl >/dev/null 2>&1; then
-  echo "[TLS] Fetching certificate from ${INGRESS_HOST} using openssl"
-  openssl s_client -connect "${INGRESS_HOST}:443" -servername "${INGRESS_HOST}" -showcerts </dev/null 2>/dev/null | sed -n '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/p' | openssl x509 -noout -text -dates -subject -issuer || echo "openssl s_client failed"
-  echo "[TLS] Fetching certificate from ${INGRESS_HOST} using curl"
-  curl -vkI "https://${INGRESS_HOST}" || true
-fi
-
 echo ""
 section "1. Testing Web health endpoint..."
 WEB_RESPONSE=$(curl "$CURL_OPTS" "${WEB_BASE_URL}/api/readyz")
