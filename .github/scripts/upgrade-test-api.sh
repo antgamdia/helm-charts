@@ -3,12 +3,16 @@ set -euo pipefail
 
 # Test via ingress (TLS) by default, can override with localhost URLs
 INGRESS_HOST="${INGRESS_HOST:-trento-test.local}"
+INGRESS_IP="${INGRESS_IP:-}"
 WEB_BASE_URL="${WEB_BASE_URL:-https://${INGRESS_HOST}}"
 WANDA_BASE_URL="${WANDA_BASE_URL:-https://${INGRESS_HOST}/wanda}"
 MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
 
 # For ingress testing, we need to accept self-signed certs
 CURL_OPTS="-k"
+if [ -n "$INGRESS_IP" ]; then
+  CURL_OPTS="$CURL_OPTS --resolve ${INGRESS_HOST}:443:${INGRESS_IP}"
+fi
 
 echo "1. Testing login endpoint..."
 LOGIN_RESPONSE=$(curl -s $CURL_OPTS -X POST "${WEB_BASE_URL}/api/session" \
@@ -24,7 +28,7 @@ if [ -z "$ACCESS_TOKEN" ]; then
   exit 1
 fi
 
-echo "✓ Login successful, token obtained"
+echo "✅ Login successful, token obtained"
 echo ""
 
 echo "2. Testing profile endpoint..."
@@ -34,7 +38,7 @@ PROFILE_RESPONSE=$(curl -s $CURL_OPTS -X GET "${WEB_BASE_URL}/api/v1/profile" \
 echo "Profile response: $PROFILE_RESPONSE"
 
 if echo "$PROFILE_RESPONSE" | grep -q "\"username\":\"admin\""; then
-  echo "✓ Profile endpoint working - admin user verified"
+  echo "✅ Profile endpoint working - admin user verified"
 else
   echo "❌ Profile endpoint failed"
   exit 1
@@ -46,9 +50,9 @@ WANDA_RESPONSE=$(curl -s $CURL_OPTS "${WANDA_BASE_URL}/api/readyz")
 echo "Wanda health: $WANDA_RESPONSE"
 
 if echo "$WANDA_RESPONSE" | grep -q "ready"; then
-  echo "✓ Wanda is ready"
+  echo "✅ Wanda is ready"
 else
-  echo "⚠ Wanda health check returned: $WANDA_RESPONSE"
+  echo "⚠️ Wanda health check returned: $WANDA_RESPONSE"
 fi
 
 echo ""
@@ -66,10 +70,10 @@ echo "$INIT_RESPONSE" | head -3
 if echo "$INIT_RESPONSE" | grep -q "serverInfo"; then
   SERVER_NAME=$(echo "$INIT_RESPONSE" | grep -o "\"name\":\"[^\"]*\"" | head -1 | cut -d\" -f4)
   SERVER_VERSION=$(echo "$INIT_RESPONSE" | grep -o "\"version\":\"[^\"]*\"" | tail -1 | cut -d\" -f4)
-  echo "   ✓ MCP server is responding: $SERVER_NAME $SERVER_VERSION"
-  echo "   ✓ MCP server successfully loaded OpenAPI specs from Web/Wanda"
+  echo "   ✅ MCP server is responding: $SERVER_NAME $SERVER_VERSION"
+  echo "   ✅ MCP server successfully loaded OpenAPI specs from Web/Wanda"
 else
-  echo "   ⚠ MCP server response unexpected"
+  echo "   ⚠️ MCP server response unexpected"
   echo "   Response: $INIT_RESPONSE"
 fi
 

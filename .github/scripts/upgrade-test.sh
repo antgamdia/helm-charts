@@ -22,7 +22,7 @@ show_pods_status() {
   kubectl get pods -n "$TRENTO_NAMESPACE" -o wide
 
   section "=== Pods not running ==="
-  kubectl get pods -n "$TRENTO_NAMESPACE" --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
+  kubectl get pods -n "$TRENTO_NAMESPACE" --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✅ All pods running"
 }
 
 show_events() {
@@ -74,7 +74,7 @@ show_failed_pod_logs() {
       kubectl logs -n "$TRENTO_NAMESPACE" "$pod" --all-containers=true --tail=100 --ignore-errors=true || echo "No logs available"
     done
   else
-    echo "✓ No failed or pending pods"
+    echo "✅ No failed or pending pods"
   fi
 }
 
@@ -130,7 +130,7 @@ compare_versions() {
           echo "${img_tag}"
         fi
       else
-        echo "  ✓ ${img_name}: ${img_tag}"
+        echo "  ✅ ${img_name}: ${img_tag}"
       fi
     else
       echo "  🆕 ${img_name}: ${img_tag} (new)"
@@ -219,6 +219,7 @@ verify_api() {
   fi
 
   INGRESS_HOST="$ingress_host" \
+  INGRESS_IP="$ingress_ip" \
     bash "$REPO_ROOT/.github/scripts/upgrade-test-api.sh"
 }
 
