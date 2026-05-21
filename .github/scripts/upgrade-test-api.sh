@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-WEB_BASE_URL="${WEB_BASE_URL:-http://127.0.0.1:4000}"
-WANDA_BASE_URL="${WANDA_BASE_URL:-http://127.0.0.1:4001}"
-MCP_BASE_URL="${MCP_BASE_URL:-http://127.0.0.1:5000}"
+# Test via ingress (TLS) by default, can override with localhost URLs
+INGRESS_HOST="${INGRESS_HOST:-trento-test.local}"
+WEB_BASE_URL="${WEB_BASE_URL:-https://${INGRESS_HOST}}"
+WANDA_BASE_URL="${WANDA_BASE_URL:-https://${INGRESS_HOST}/wanda}"
+MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
+
+# For ingress testing, we need to accept self-signed certs
+CURL_OPTS="-k"
 
 echo "1. Testing login endpoint..."
-LOGIN_RESPONSE=$(curl -s -X POST "${WEB_BASE_URL}/api/session" \
+LOGIN_RESPONSE=$(curl -s $CURL_OPTS -X POST "${WEB_BASE_URL}/api/session" \
   -H "Content-Type: application/json" \
   -d "{\"username\": \"admin\", \"password\": \"admin-test-password\"}")
 
@@ -23,7 +28,7 @@ echo "✓ Login successful, token obtained"
 echo ""
 
 echo "2. Testing profile endpoint..."
-PROFILE_RESPONSE=$(curl -s -X GET "${WEB_BASE_URL}/api/v1/profile" \
+PROFILE_RESPONSE=$(curl -s $CURL_OPTS -X GET "${WEB_BASE_URL}/api/v1/profile" \
   -H "Authorization: Bearer $ACCESS_TOKEN")
 
 echo "Profile response: $PROFILE_RESPONSE"
@@ -37,7 +42,7 @@ fi
 
 echo ""
 echo "3. Testing Wanda health endpoint..."
-WANDA_RESPONSE=$(curl -s "${WANDA_BASE_URL}/api/readyz")
+WANDA_RESPONSE=$(curl -s $CURL_OPTS "${WANDA_BASE_URL}/api/readyz")
 echo "Wanda health: $WANDA_RESPONSE"
 
 if echo "$WANDA_RESPONSE" | grep -q "ready"; then
@@ -50,7 +55,7 @@ echo ""
 echo "4. Testing MCP server..."
 
 echo "   Testing MCP endpoint availability..."
-INIT_RESPONSE=$(curl -s -X POST "${MCP_BASE_URL}/mcp" \
+INIT_RESPONSE=$(curl -s $CURL_OPTS -X POST "${MCP_BASE_URL}/mcp" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2024-11-05\", \"clientInfo\": {\"name\": \"test-client\", \"version\": \"1.0.0\"}, \"capabilities\": {}}}")

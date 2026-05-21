@@ -6,7 +6,6 @@ cd "$REPO_ROOT"
 
 CHART_DIR="${CHART_DIR:-charts/trento-server}"
 TRENTO_NAMESPACE="${TRENTO_NAMESPACE:-trento}"
-PORT_FORWARD_PIDS=()
 
 section() {
   printf '\n%s\n' "$1"
@@ -18,70 +17,51 @@ banner() {
   printf '%s\n' "╚════════════════════════════════════════════════════════════════════════╝"
 }
 
-emit_output() {
-  local name="$1"
-  local value="$2"
-
-  if [ -n "${GITHUB_OUTPUT:-}" ]; then
-    printf '%s=%s\n' "$name" "$value" >> "$GITHUB_OUTPUT"
-  else
-    printf '%s=%s\n' "$name" "$value"
-  fi
-}
-
-wait_for_port() {
-  local host="$1"
-  local port="$2"
-  local label="$3"
-  local attempt=1
-
-  while [ "$attempt" -le 30 ]; do
-    if (echo > "/dev/tcp/${host}/${port}") >/dev/null 2>&1; then
-      return 0
-    fi
-    attempt=$((attempt + 1))
-    sleep 1
-  done
-
-  printf 'Timed out waiting for %s on %s:%s\n' "$label" "$host" "$port" >&2
-  return 1
-}
-
-start_port_forward() {
-  local resource="$1"
-  local local_port="$2"
-  local remote_port="$3"
-  local log_file="$4"
-
-  kubectl port-forward -n "$TRENTO_NAMESPACE" "$resource" "${local_port}:${remote_port}" >"$log_file" 2>&1 &
-  PORT_FORWARD_PIDS+=("$!")
-}
-
-cleanup_port_forwards() {
-  local pid
-
-  for pid in "${PORT_FORWARD_PIDS[@]:-}"; do
-    kill "$pid" 2>/dev/null || true
-  done
-
-  for pid in "${PORT_FORWARD_PIDS[@]:-}"; do
-    wait "$pid" 2>/dev/null || true
-  done
-
-  PORT_FORWARD_PIDS=()
-}
-
-post_install_diagnostics() {
-  banner "                      POST-INSTALL DIAGNOSTICS                          "
+show_pods_status() {
   section "=== All pods ==="
   kubectl get pods -n "$TRENTO_NAMESPACE" -o wide
 
   section "=== Pods not running ==="
   kubectl get pods -n "$TRENTO_NAMESPACE" --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
+}
 
-  section "=== Recent events (last 30) ==="
-  kubectl get events -n "$TRENTO_NAMESPACE" --sort-by='.lastTimestamp' | tail -30
+show_events() {
+  local sort_by="${1:-}"
+  local limit="${2:-30}"
 
+  if [ -z "$sort_by" ]; then
+    section "=== Recent events (last $limit) ==="
+    kubectl get events -n "$TRENTO_NAMESPACE" --sort-by='.lastTimestamp' | tail -"$limit"
+  else
+    section "=== All events ==="
+    kubectl get events -n "$TRENTO_NAMESPACE" --sort-by='.lastTimestamp'
+  fi
+}
+
+show_pod_logs() {
+  local log_lines="${1:-30}"
+  local log_context="${2:-}"
+  local show_previous="${3:-false}"
+  local separator="${4:-────────────────────────────────────────────────────────────────────────}"
+
+  section "=== ${log_context}Pod logs (last $log_lines lines each) ==="
+  local pod
+  for pod in $(kubectl get pods -n "$TRENTO_NAMESPACE" -o jsonpath='{.items[*].metadata.name}'); do
+    echo ""
+    echo "$separator"
+    echo "Pod: $pod"
+    echo "$separator"
+    kubectl logs -n "$TRENTO_NAMESPACE" "$pod" --all-containers=true --tail="$log_lines" --ignore-errors=true || echo "No logs available"
+
+    if [ "$show_previous" = "true" ]; then
+      echo ""
+      echo "--- $pod (previous) ---"
+      kubectl logs -n "$TRENTO_NAMESPACE" "$pod" --all-containers=true --previous --ignore-errors=true 2>/dev/null || echo "No previous logs"
+    fi
+  done
+}
+
+show_failed_pod_logs() {
   section "=== Logs for failed/pending pods ==="
   local failed_pods
   failed_pods=$(kubectl get pods -n "$TRENTO_NAMESPACE" --field-selector=status.phase!=Running -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)
@@ -96,15 +76,18 @@ post_install_diagnostics() {
   else
     echo "✓ No failed or pending pods"
   fi
+}
 
+post_install_diagnostics() {
+  banner "                      POST-INSTALL DIAGNOSTICS                          "
+  show_pods_status
+  show_events
+  show_failed_pod_logs
   echo ""
   banner "                      DIAGNOSTICS COMPLETE                              "
 }
 
-compare_container_versions() {
-  local current_chart=""
-  local chart_dir chart_name display_name img_full img_registry img_name img_tag old_line old_full old_registry old_tag img
-
+get_container_versions() {
   section "=== Extracting current deployed images ==="
   kubectl get pods -n "$TRENTO_NAMESPACE" -o json | \
     jq -r '
@@ -122,25 +105,27 @@ compare_container_versions() {
   cat /tmp/current-images.txt
 
   section "=== Extracting new chart images ==="
-  helm template trento "$CHART_DIR" ${HELM_COMMON_FLAGS} | \
+  helm template trento "$CHART_DIR" "${HELM_COMMON_FLAGS}" | \
     grep -E "^\s+image:" | \
     awk '{gsub(/"/, "", $2); print $2}' | \
     sort -u > /tmp/new-images-raw.txt
 
   : > /tmp/new-images.txt
+  local chart_dir chart_name display_name
   for chart_dir in "$CHART_DIR"/charts/*/; do
     if [ -d "$chart_dir" ]; then
       chart_name=$(basename "$chart_dir")
       display_name=$(echo "$chart_name" | sed 's/^trento-//')
 
       helm template trento "$CHART_DIR" \
-        ${HELM_COMMON_FLAGS} \
+        "${HELM_COMMON_FLAGS}" \
         -s "charts/${chart_name}/templates/*.yaml" 2>/dev/null | \
         grep -E "^\s+image:" | \
         awk -v chart="$display_name" '{gsub(/"/, "", $2); print chart "|" $2}' >> /tmp/new-images.txt || true
     fi
   done
 
+  local img
   while read -r img; do
     if ! grep -q "|${img}$" /tmp/new-images.txt; then
       echo "main|${img}" >> /tmp/new-images.txt
@@ -151,12 +136,16 @@ compare_container_versions() {
 
   echo "New images found:"
   cat /tmp/new-images.txt
+}
 
+compare_versions() {
   echo ""
   banner "                    CONTAINER VERSION COMPARISON                        "
   echo ""
 
-  current_chart=""
+  local current_chart=""
+  local chart_name img_full img_registry img_name img_tag old_line old_full old_registry old_tag
+
   while IFS='|' read -r chart_name img_full; do
     img_registry=$(echo "$img_full" | sed -E 's|/.*||')
     img_name=$(echo "$img_full" | sed -E 's|.*/||; s|:.*||')
@@ -200,17 +189,32 @@ compare_container_versions() {
   echo "────────────────────────────────────────────────────────────────────────"
 }
 
-post_upgrade_diagnostics() {
-  banner "                         POST-UPGRADE DIAGNOSTICS                       "
-  section "=== All pods ==="
-  kubectl get pods -n "$TRENTO_NAMESPACE" -o wide
+compare_container_versions() {
+  get_container_versions
+  compare_versions
+}
 
-  section "=== Pods not running ==="
-  kubectl get pods -n "$TRENTO_NAMESPACE" --field-selector=status.phase!=Running -o custom-columns=NAME:.metadata.name,STATUS:.status.phase,REASON:.status.reason 2>/dev/null || echo "✓ All pods running"
 
-  section "=== Recent events (last 30) ==="
-  kubectl get events -n "$TRENTO_NAMESPACE" --sort-by='.lastTimestamp' | tail -30
+verify_api() {
+  banner "                         API FUNCTIONALITY TEST                         "
+  echo ""
+  section "=== Testing Trento API endpoints via ingress ==="
 
+  local ingress_host="${TRENTO_WEB_ORIGIN:-trento-test.local}"
+  local ingress_ip
+  ingress_ip=$(kubectl get ingress -n "$TRENTO_NAMESPACE" -o jsonpath='{.items[0].status.loadBalancer.ingress[0].ip}' 2>/dev/null || echo "")
+
+  if [ -n "$ingress_ip" ]; then
+    echo "Ingress IP: $ingress_ip"
+  else
+    echo "Using ingress hostname: $ingress_host"
+  fi
+
+  INGRESS_HOST="$ingress_host" \
+    bash "$REPO_ROOT/.github/scripts/upgrade-test-api.sh"
+}
+
+show_web_init_logs() {
   section "=== Web init container logs (DB migration) ==="
   local web_pod
   web_pod=$(kubectl get pod -n "$TRENTO_NAMESPACE" \
@@ -221,77 +225,24 @@ post_upgrade_diagnostics() {
   else
     echo "Failed to find web pod"
   fi
-
-  section "=== All pod logs (last 30 lines each) ==="
-  local pod
-  for pod in $(kubectl get pods -n "$TRENTO_NAMESPACE" -o jsonpath='{.items[*].metadata.name}'); do
-    echo ""
-    echo "────────────────────────────────────────────────────────────────────────"
-    echo "Pod: $pod"
-    echo "────────────────────────────────────────────────────────────────────────"
-    kubectl logs -n "$TRENTO_NAMESPACE" "$pod" --all-containers=true --tail=30 --ignore-errors=true || echo "No logs available"
-  done
-
-  echo ""
-  banner "                      DIAGNOSTICS COMPLETE                              "
 }
 
-verify_api() {
-  local web_port_forward_log
-  local wanda_port_forward_log
-  local mcp_port_forward_log
-
-  banner "                         API FUNCTIONALITY TEST                         "
+post_upgrade_diagnostics() {
+  banner "                         POST-UPGRADE DIAGNOSTICS                       "
+  show_pods_status
+  show_events
+  show_web_init_logs
+  show_pod_logs 30 "All "
   echo ""
-  section "=== Starting port-forwards ==="
-
-  web_port_forward_log=$(mktemp)
-  wanda_port_forward_log=$(mktemp)
-  mcp_port_forward_log=$(mktemp)
-
-  start_port_forward svc/trento-server-web 4000 4000 "$web_port_forward_log"
-  start_port_forward svc/trento-server-wanda 4001 4000 "$wanda_port_forward_log"
-  start_port_forward svc/trento-server-mcp-server 5000 5000 "$mcp_port_forward_log"
-
-  trap cleanup_port_forwards EXIT
-
-  wait_for_port 127.0.0.1 4000 web
-  wait_for_port 127.0.0.1 4001 wanda
-  wait_for_port 127.0.0.1 5000 mcp
-
-  section "=== Testing Trento API endpoints ==="
-  WEB_BASE_URL=http://127.0.0.1:4000 \
-  WANDA_BASE_URL=http://127.0.0.1:4001 \
-  MCP_BASE_URL=http://127.0.0.1:5000 \
-    bash "$REPO_ROOT/.github/scripts/upgrade-test-api.sh"
-
-  trap - EXIT
-  cleanup_port_forwards
-  rm -f "$web_port_forward_log" "$wanda_port_forward_log" "$mcp_port_forward_log"
+  banner "                      DIAGNOSTICS COMPLETE                              "
 }
 
 failure_diagnostics() {
   banner "                    FAILURE DIAGNOSTICS - FULL LOGS                     "
   echo ""
-  section "=== All pods ==="
-  kubectl get pods -n "$TRENTO_NAMESPACE" -o wide
-
-  section "=== All events ==="
-  kubectl get events -n "$TRENTO_NAMESPACE" --sort-by='.lastTimestamp'
-
-  section "=== Full container logs (all pods) ==="
-  local pod
-  for pod in $(kubectl get pods -n "$TRENTO_NAMESPACE" -o jsonpath='{.items[*].metadata.name}'); do
-    echo ""
-    echo "════════════════════════════════════════════════════════════════════════"
-    echo "Pod: $pod (FULL LOGS)"
-    echo "════════════════════════════════════════════════════════════════════════"
-    kubectl logs -n "$TRENTO_NAMESPACE" "$pod" --all-containers=true --ignore-errors=true || echo "No logs available"
-
-    echo ""
-    echo "--- $pod (previous) ---"
-    kubectl logs -n "$TRENTO_NAMESPACE" "$pod" --all-containers=true --previous --ignore-errors=true 2>/dev/null || echo "No previous logs"
-  done
+  show_pods_status
+  show_events "all"
+  show_pod_logs 0 "Full " true "════════════════════════════════════════════════════════════════════════"
 }
 
 main() {
