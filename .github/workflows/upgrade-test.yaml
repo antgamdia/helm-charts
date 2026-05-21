@@ -12,6 +12,7 @@ on:
 env:
   K3S_VERSION: v1.36.1+k3s1 # https://hub.docker.com/r/rancher/k3s/tags
   CERT_MANAGER_VERSION: v1.20.2 # https://github.com/cert-manager/cert-manager/releases
+  HELM_VERSION: v4.2.0 # http://github.com/helm/helm/releases
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -87,6 +88,7 @@ jobs:
         uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
         with:
           k3s-version: ${{ env.K3S_VERSION }}
+          helm-version: ${{ env.HELM_VERSION }}
 
       - name: Install cert-manager
         run: |
@@ -99,14 +101,12 @@ jobs:
 
       - name: Prepare cert-manager resources
         run: |
-          envsubst < hack/cert-manager/certificate.tpl.yaml > hack/cert-manager/certificate.yaml
           envsubst < hack/cert-manager/cluster-issuer.tpl.yaml > hack/cert-manager/cluster-issuer.yaml
           envsubst < hack/cert-manager/override-values.tpl.yaml > hack/cert-manager/override-values.yaml
 
-      - name: Apply cert-manager resources
+      - name: Apply ClusterIssuer
         run: |
           kubectl apply -f hack/cert-manager/cluster-issuer.yaml
-          kubectl apply -f hack/cert-manager/certificate.yaml
 
       - name: Download and prepare OSS release
         if: matrix.source == 'oss-release'
