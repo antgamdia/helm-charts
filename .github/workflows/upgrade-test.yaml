@@ -1,0 +1,170 @@
+# SPDX-FileCopyrightText: SUSE LLC
+# SPDX-License-Identifier: Apache-2.0
+
+name: Chart Upgrade Test
+
+on:
+  push:
+    branches:
+      - "main"
+  pull_request:
+
+env:
+  K3S_VERSION: v1.36.1-k3s1 # https://hub.docker.com/r/rancher/k3s/tags
+  CERT_MANAGER_VERSION: v1.20.2 # https://github.com/cert-manager/cert-manager/releases
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade-test:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    env:
+      SUSE_REGISTRY: registry.suse.com/trento/trento-server
+      HELM_CHARTS_REPO: ${{ github.repository_owner }}/helm-charts
+      OSS_CHART_REGISTRY: ghcr.io/${{ github.repository_owner }}/helm-charts/trento-server
+      TRENTO_NAMESPACE: trento
+      TRENTO_WEB_ORIGIN: trento-test.local
+      TRENTO_WEB_PASSWORD: test-password-123
+      TRENTO_ADMIN_EMAIL: admin@trento-test.local
+      TRENTO_INGRESS_CLASS: traefik
+      HELM_FLAGS: |
+        --namespace "${TRENTO_NAMESPACE}"
+        # Web
+        --set trento-web.adminUser.password="${TRENTO_WEB_PASSWORD}"
+        --set trento-web.image.pullPolicy=Always
+        # Wanda
+        --set trento-wanda.image.pullPolicy=Always
+        # Checks
+        --set trento-wanda.checks.image.pullPolicy=Always
+        # MCP Server
+        --set trento-mcp-server.enabled=true
+        --set trento-mcp-server.image.pullPolicy=Always
+        # Others
+        --set global.trentoWeb.origin="${TRENTO_WEB_ORIGIN}"
+        --set prometheus.enabled=false
+        # Ingress
+        -f hack/cert-manager/override-values.yaml
+    strategy:
+      matrix:
+        include:
+          - name: "SUSE latest release → current"
+            source: suse-release
+          - name: "OSS latest release → current"
+            source: oss-release
+          - name: "OSS rolling → current"
+            source: oss-main
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Resolve chart version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "${{ matrix.source }}" in
+            suse-release)
+              VERSION=$(skopeo list-tags "docker://${SUSE_REGISTRY}" | jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V | tail -1)
+              ;;
+            oss-release)
+              VERSION=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')
+              ;;
+            oss-main)
+              VERSION="rolling"
+              ;;
+          esac
+          echo "value=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create k3s cluster
+        uses: jupyterhub/action-k3s-helm@502a9ff4d816dad543e359971fe2c3128d0f4c6e # v4
+        with:
+          k3s-version: ${{ env.K3S_VERSION }}
+
+      - name: Install cert-manager
+        run: |
+          helm install cert-manager oci://quay.io/jetstack/charts/cert-manager \
+            --version ${{ env.CERT_MANAGER_VERSION }} \
+            --namespace cert-manager \
+            --create-namespace \
+            --set crds.enabled=true
+        continue-on-error: true
+
+      - name: Prepare cert-manager resources
+        run: |
+          envsubst < hack/cert-manager/certificate.tpl.yaml > hack/cert-manager/certificate.yaml
+          envsubst < hack/cert-manager/cluster-issuer.tpl.yaml > hack/cert-manager/cluster-issuer.yaml
+          envsubst < hack/cert-manager/override-values.tpl.yaml > hack/cert-manager/override-values.yaml
+
+      - name: Apply cert-manager resources
+        run: |
+          kubectl apply -f hack/cert-manager/cluster-issuer.yaml
+          kubectl apply -f hack/cert-manager/certificate.yaml
+
+      - name: Download and prepare OSS release
+        if: matrix.source == 'oss-release'
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          wget -q https://github.com/${HELM_CHARTS_REPO}/archive/refs/tags/${VERSION}.tar.gz
+          tar -xzf ${VERSION}.tar.gz
+          cd helm-charts-${VERSION}/charts/trento-server
+          helm dependency update
+
+      - name: Install chart
+        run: |
+          if [ "${{ matrix.source }}" = "suse-release" ]; then
+            CHART_REF="oci://${SUSE_REGISTRY}"
+            VERSION="${{ steps.version.outputs.value }}"
+          elif [ "${{ matrix.source }}" = "oss-release" ]; then
+            VERSION="${{ steps.version.outputs.value }}"
+            CHART_REF="helm-charts-${VERSION}/charts/trento-server"
+          else
+            CHART_REF="oci://${OSS_CHART_REGISTRY}"
+            VERSION="rolling"
+          fi
+
+          helm upgrade -i trento-server "$CHART_REF" --wait \
+            --version "${VERSION}" \
+            --create-namespace \
+            --timeout 2m \
+            ${HELM_FLAGS}
+
+      - name: Check pod status after install
+        if: always()
+        run: bash .github/scripts/upgrade-test.sh post-install-diagnostics
+
+      - name: Build chart dependencies for current dev chart
+        run: |
+          helm dependency build charts/trento-server
+
+      - name: Compare container versions (before upgrade)
+        run: bash .github/scripts/upgrade-test.sh compare-container-versions
+
+      - name: Upgrade to current dev chart
+        run: |
+          helm upgrade -i trento-server charts/trento-server --wait \
+            --timeout 3m \
+            --debug \
+            ${HELM_FLAGS} \
+            --set trento-web.image.tag=rolling \
+            --set trento-wanda.image.tag=rolling \
+            --set trento-wanda.checks.image.tag=rolling \
+            --set trento-mcp-server.image.tag=rolling
+
+      - name: Verify upgrade
+        run: bash .github/scripts/upgrade-test.sh post-upgrade-diagnostics
+
+      - name: Verify API is working
+        run: bash .github/scripts/upgrade-test.sh verify-api
+
+      - name: Dump diagnostics on failure
+        if: failure()
+        run: bash .github/scripts/upgrade-test.sh failure-diagnostics
