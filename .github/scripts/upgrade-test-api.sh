@@ -14,7 +14,7 @@ banner() {
 # Test via ingress (TLS) by default, can override with localhost URLs
 INGRESS_HOST="${INGRESS_HOST:-trento-test.local}"
 WEB_BASE_URL="${WEB_BASE_URL:-https://${INGRESS_HOST}}"
-WANDA_BASE_URL="${WANDA_BASE_URL:-https://${INGRESS_HOST}/wanda}"
+WANDA_BASE_URL="${:-https://${INGRESS_HOST}/wanda}"
 MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
 
 echo ""
