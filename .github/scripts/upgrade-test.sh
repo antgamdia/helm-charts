@@ -87,58 +87,10 @@ post_install_diagnostics() {
   banner "                      DIAGNOSTICS COMPLETE                              "
 }
 
-get_container_versions() {
-  section "=== Extracting current deployed images ==="
-  kubectl get pods -n "$TRENTO_NAMESPACE" -o json | \
-    jq -r '
-      .items[] |
-      .metadata.labels."app.kubernetes.io/name" as $chart |
-      (
-        ((.spec.initContainers // [])[] |
-        "\($chart)|\(.name)|init|\(.image)"),
-        ((.spec.containers // [])[] |
-        "\($chart)|\(.name)|container|\(.image)")
-      )
-    ' | sort > /tmp/current-images.txt
-
-  echo "Current images found:"
-  cat /tmp/current-images.txt
-
-  section "=== Extracting new chart images ==="
-  helm template trento "$CHART_DIR" "${HELM_COMMON_FLAGS}" | \
-    grep -E "^\s+image:" | \
-    awk '{gsub(/"/, "", $2); print $2}' | \
-    sort -u > /tmp/new-images-raw.txt
-
-  : > /tmp/new-images.txt
-  local chart_dir chart_name display_name
-  for chart_dir in "$CHART_DIR"/charts/*/; do
-    if [ -d "$chart_dir" ]; then
-      chart_name=$(basename "$chart_dir")
-      display_name=$(echo "$chart_name" | sed 's/^trento-//')
-
-      helm template trento "$CHART_DIR" \
-        "${HELM_COMMON_FLAGS}" \
-        -s "charts/${chart_name}/templates/*.yaml" 2>/dev/null | \
-        grep -E "^\s+image:" | \
-        awk -v chart="$display_name" '{gsub(/"/, "", $2); print chart "|" $2}' >> /tmp/new-images.txt || true
-    fi
-  done
-
-  local img
-  while read -r img; do
-    if ! grep -q "|${img}$" /tmp/new-images.txt; then
-      echo "main|${img}" >> /tmp/new-images.txt
-    fi
-  done < /tmp/new-images-raw.txt
-
-  sort -u /tmp/new-images.txt -o /tmp/new-images.txt
-
-  echo "New images found:"
-  cat /tmp/new-images.txt
-}
-
 compare_versions() {
+  local current_images_file="$1"
+  local new_images_file="$2"
+
   echo ""
   banner "                    CONTAINER VERSION COMPARISON                        "
   echo ""
@@ -158,7 +110,7 @@ compare_versions() {
       current_chart="$chart_name"
     fi
 
-    old_line=$(grep "|[^|]*${img_name}:" /tmp/current-images.txt | head -1 || true)
+    old_line=$(grep "|[^|]*${img_name}:" "$current_images_file" | head -1 || true)
 
     if [ -n "$old_line" ]; then
       old_full=$(echo "$old_line" | cut -d'|' -f4)
@@ -183,15 +135,71 @@ compare_versions() {
     else
       echo "  🆕 ${img_name}: ${img_tag} (new)"
     fi
-  done < /tmp/new-images.txt
+  done < "$new_images_file"
 
   echo ""
   echo "────────────────────────────────────────────────────────────────────────"
 }
 
 compare_container_versions() {
-  get_container_versions
-  compare_versions
+  local tmp_current_images
+  local tmp_new_images
+  local tmp_new_images_raw
+
+  tmp_current_images=$(mktemp)
+  tmp_new_images=$(mktemp)
+  tmp_new_images_raw=$(mktemp)
+
+  section "=== Extracting current deployed images ==="
+  kubectl get pods -n "$TRENTO_NAMESPACE" -o json | \
+    jq -r '
+      .items[] |
+      .metadata.labels."app.kubernetes.io/name" as $chart |
+      (
+        ((.spec.initContainers // [])[] |
+        "\($chart)|\(.name)|init|\(.image)"),
+        ((.spec.containers // [])[] |
+        "\($chart)|\(.name)|container|\(.image)")
+      )
+    ' | sort > "$tmp_current_images"
+
+  echo "Current images found:"
+  cat "$tmp_current_images"
+
+  section "=== Extracting new chart images ==="
+  helm template trento "$CHART_DIR" \
+    $HELM_COMMON_FLAGS | \
+    grep -E "^\s+image:" | \
+    awk '{gsub(/"/, "", $2); print $2}' | \
+    sort -u > "$tmp_new_images_raw"
+
+  local chart_dir chart_name display_name
+  for chart_dir in "$CHART_DIR"/charts/*/; do
+    if [ -d "$chart_dir" ]; then
+      chart_name=$(basename "$chart_dir")
+      display_name=$(echo "$chart_name" | sed 's/^trento-//')
+
+      helm template trento "$CHART_DIR" \
+        $HELM_COMMON_FLAGS \
+        -s "charts/${chart_name}/templates/*.yaml" 2>/dev/null | \
+        grep -E "^\s+image:" | \
+        awk -v chart="$display_name" '{gsub(/"/, "", $2); print chart "|" $2}' >> "$tmp_new_images" || true
+    fi
+  done
+
+  local img
+  while read -r img; do
+    if ! grep -q "|${img}$" "$tmp_new_images"; then
+      echo "main|${img}" >> "$tmp_new_images"
+    fi
+  done < "$tmp_new_images_raw"
+
+  sort -u "$tmp_new_images" -o "$tmp_new_images"
+
+  echo "New images found:"
+  cat "$tmp_new_images"
+
+  compare_versions "$tmp_current_images" "$tmp_new_images"
 }
 
 
