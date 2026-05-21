@@ -26,6 +26,9 @@ jobs:
       contents: read
       packages: read
     env:
+      SOURCE_SUSE_RELEASE: suse-release
+      SOURCE_OSS_RELEASE: oss-release
+      SOURCE_OSS_MAIN: oss-main
       SUSE_REGISTRY: registry.suse.com/trento/trento-server
       HELM_CHARTS_REPO: trento-project/helm-charts
       OSS_CHART_REGISTRY: ghcr.io/trento-project/helm-charts/trento-server
@@ -50,11 +53,11 @@ jobs:
       matrix:
         include:
           - name: "SUSE latest release → current"
-            source: suse-release
+            source: ${{ env.SOURCE_SUSE_RELEASE }}
           - name: "OSS latest release → current"
-            source: oss-release
+            source: ${{ env.SOURCE_OSS_RELEASE }}
           - name: "OSS rolling → current"
-            source: oss-main
+            source: ${{ env.SOURCE_OSS_MAIN }}
       fail-fast: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -67,30 +70,29 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Resolving chart version for source: ${{ matrix.source }}"
-          case "${{ matrix.source }}" in
-            suse-release)
-              echo "  Querying SUSE registry: ${SUSE_REGISTRY}"
-              VERSIONS=$(skopeo list-tags "docker://${SUSE_REGISTRY}" | jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V)
-              echo "  Available versions:"
-              echo "$VERSIONS" | sed 's/^/    /'
-              VERSION=$(echo "$VERSIONS" | tail -1)
-              ;;
-            oss-release)
-              echo "  Querying GitHub releases for: ${HELM_CHARTS_REPO}"
-              RELEASES=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --limit 10 --json tagName --jq '.[].tagName')
-              echo "  Available versions:"
-              echo "$RELEASES" | sed 's/^/    /'
-              VERSION=$(echo "$RELEASES" | head -1)
-              if [ -z "$VERSION" ]; then
-                echo "ERROR: No versions found for ${HELM_CHARTS_REPO}"
-                exit 1
-              fi
-              ;;
-            oss-main)
-              echo "  Using rolling tag for OSS main branch"
-              VERSION="rolling"
-              ;;
-          esac
+
+          if [ "${{ matrix.source }}" = "${SOURCE_SUSE_RELEASE}" ]; then
+            REGISTRY="${SUSE_REGISTRY}"
+          elif [ "${{ matrix.source }}" = "${SOURCE_OSS_MAIN}" ]; then
+            REGISTRY="${OSS_CHART_REGISTRY}"
+          fi
+
+          if [ "${{ matrix.source }}" = "${SOURCE_SUSE_RELEASE}" ] || [ "${{ matrix.source }}" = "${SOURCE_OSS_MAIN}" ]; then
+            echo "  Querying registry: ${REGISTRY}"
+            VERSIONS=$(skopeo list-tags "docker://${REGISTRY}" | jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V)
+          elif [ "${{ matrix.source }}" = "${SOURCE_OSS_RELEASE}" ]; then
+            echo "  Querying GitHub releases for: ${HELM_CHARTS_REPO}"
+            VERSIONS=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --limit 10 --json tagName --jq '.[].tagName')
+          fi
+
+          VERSION=$(echo "$VERSIONS" | tail -1)
+          if [ -z "$VERSION" ]; then
+            echo "ERROR: No versions found for ${{ matrix.source }}"
+            exit 1
+          fi
+
+          echo "  Available versions:"
+          echo "$VERSIONS" | sed 's/^/    /'
           echo ""
           echo "Selected version: ${VERSION}"
           echo "value=${VERSION}" >> $GITHUB_OUTPUT
@@ -125,36 +127,21 @@ jobs:
         run: |
           echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
-      - name: Download and prepare OSS release
-        if: matrix.source == 'oss-release'
-        env:
-          VERSION: ${{ steps.version.outputs.value }}
-        run: |
-          if [ -z "$VERSION" ]; then
-            echo "ERROR: VERSION is empty. Failed to resolve version in previous step."
-            exit 1
-          fi
-          echo "Downloading OSS release version: ${VERSION}"
-          wget -q https://github.com/${HELM_CHARTS_REPO}/archive/refs/tags/${VERSION}.tar.gz
-          tar -xzf ${VERSION}.tar.gz
-          cd helm-charts-${VERSION}/charts/trento-server
-          helm dependency update
-
       - name: Install chart
         run: |
-          if [ "${{ matrix.source }}" = "suse-release" ]; then
+          if [ "${{ matrix.source }}" = "${SOURCE_SUSE_RELEASE}" ]; then
             CHART_REF="oci://${SUSE_REGISTRY}"
-            VERSION_FLAG="--version ${{ steps.version.outputs.value }}"
-          elif [ "${{ matrix.source }}" = "oss-release" ]; then
-            CHART_REF="helm-charts-${{ steps.version.outputs.value }}/charts/trento-server"
-            VERSION_FLAG="--version ${{ steps.version.outputs.value }}"
+          elif [ "${{ matrix.source }}" = "${SOURCE_OSS_RELEASE}" ]; then
+            CHART_REF="oci://${OSS_CHART_REGISTRY}"
+          elif [ "${{ matrix.source }}" = "${SOURCE_OSS_MAIN}" ]; then
+            CHART_REF="oci://${OSS_CHART_REGISTRY}"
           else
-            CHART_REF="oci://${OSS_CHART_REGISTRY}:rolling"
-            VERSION_FLAG=""
+            echo "ERROR: Unknown source ${{ matrix.source }}"
+            exit 1
           fi
 
           helm upgrade -i trento-server "$CHART_REF" --wait \
-            ${VERSION_FLAG} \
+            --version "${{ steps.version.outputs.value }}" \
             --create-namespace \
             --timeout 3m \
             --render-subchart-notes \
