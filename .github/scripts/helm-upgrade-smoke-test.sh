@@ -23,7 +23,7 @@ MCP_BASE_URL="${MCP_BASE_URL:-https://${INGRESS_HOST}/mcp}"
 
 echo ""
 section "1. Testing Web health endpoint..."
-WEB_RESPONSE=$(curl -s "${WEB_BASE_URL}/api/readyz")
+WEB_RESPONSE=$(curl -sk "${WEB_BASE_URL}/api/readyz")
 echo "Web health: $WEB_RESPONSE"
 
 if echo "$WEB_RESPONSE" | grep -q "ready"; then
@@ -34,7 +34,7 @@ fi
 
 echo ""
 section "2. Testing Wanda health endpoint..."
-WANDA_RESPONSE=$(curl -s "${WANDA_BASE_URL}/api/readyz")
+WANDA_RESPONSE=$(curl -sk "${WANDA_BASE_URL}/api/readyz")
 echo "Wanda health: $WANDA_RESPONSE"
 
 if echo "$WANDA_RESPONSE" | grep -q "ready"; then
@@ -44,7 +44,7 @@ else
 fi
 
 section "3. Testing login endpoint..."
-LOGIN_RESPONSE=$(curl -s -X POST "${WEB_BASE_URL}/api/session" \
+LOGIN_RESPONSE=$(curl -sk -X POST "${WEB_BASE_URL}/api/session" \
   -H "Content-Type: application/json" \
   -d "{\"username\": \"admin\", \"password\": \"admin-test-password\"}")
 
@@ -61,7 +61,7 @@ echo "✅ Login successful, token obtained"
 echo ""
 
 section "4. Testing profile endpoint..."
-PROFILE_RESPONSE=$(curl -s -X GET "${WEB_BASE_URL}/api/v1/profile" \
+PROFILE_RESPONSE=$(curl -sk -X GET "${WEB_BASE_URL}/api/v1/profile" \
   -H "Authorization: Bearer $ACCESS_TOKEN")
 
 echo "Profile response: $PROFILE_RESPONSE"
@@ -77,7 +77,7 @@ echo ""
 section "5. Testing MCP server..."
 
 echo "   Testing MCP endpoint availability..."
-INIT_RESPONSE=$(curl -s -X POST "${MCP_BASE_URL}/mcp" \
+INIT_RESPONSE=$(curl -sk -X POST "${MCP_BASE_URL}/mcp" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $ACCESS_TOKEN" \
   -d "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"initialize\", \"params\": {\"protocolVersion\": \"2024-11-05\", \"clientInfo\": {\"name\": \"test-client\", \"version\": \"1.0.0\"}, \"capabilities\": {}}}")
