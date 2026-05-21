@@ -34,6 +34,17 @@ jobs:
       TRENTO_WEB_PASSWORD: test-password-123
       TRENTO_ADMIN_EMAIL: admin@trento-test.local
       TRENTO_INGRESS_CLASS: traefik
+      HELM_COMMON_FLAGS: |
+        --namespace trento
+        --set trento-web.adminUser.password=admin-test-password
+        --set trento-web.image.pullPolicy=Always
+        --set trento-wanda.image.pullPolicy=Always
+        --set trento-wanda.checks.image.pullPolicy=Always
+        --set trento-mcp-server.enabled=true
+        --set trento-mcp-server.image.pullPolicy=Always
+        --set global.trentoWeb.origin=trento-test.local
+        --set prometheus.enabled=false
+        -f hack/cert-manager/override-values.yaml
     strategy:
       matrix:
         include:
@@ -54,17 +65,29 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          echo "Resolving chart version for source: ${{ matrix.source }}"
           case "${{ matrix.source }}" in
             suse-release)
-              VERSION=$(skopeo list-tags "docker://${SUSE_REGISTRY}" | jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V | tail -1)
+              echo "  Querying SUSE registry: ${SUSE_REGISTRY}"
+              VERSIONS=$(skopeo list-tags "docker://${SUSE_REGISTRY}" | jq -r '.Tags[]' | grep '^[0-9]\+\.[0-9]\+\.[0-9]' | sort -V)
+              echo "  Available versions:"
+              echo "$VERSIONS" | sed 's/^/    /'
+              VERSION=$(echo "$VERSIONS" | tail -1)
               ;;
             oss-release)
-              VERSION=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName')
+              echo "  Querying GitHub releases for: ${HELM_CHARTS_REPO}"
+              RELEASES=$(gh release list --repo "${HELM_CHARTS_REPO}" --exclude-pre-releases --json tagName --jq '.[].tagName')
+              echo "  Available versions:"
+              echo "$RELEASES" | sed 's/^/    /'
+              VERSION=$(echo "$RELEASES" | head -1)
               ;;
             oss-main)
+              echo "  Using rolling tag for OSS main branch"
               VERSION="rolling"
               ;;
           esac
+          echo ""
+          echo "Selected version: ${VERSION}"
           echo "value=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Create k3s cluster
@@ -91,6 +114,11 @@ jobs:
       - name: Apply ClusterIssuer
         run: |
           kubectl apply -f hack/cert-manager/cluster-issuer.yaml
+
+      - name: Login to GHCR (OSS sources only)
+        if: contains(matrix.source, 'oss')
+        run: |
+          echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
       - name: Download and prepare OSS release
         if: matrix.source == 'oss-release'
@@ -119,23 +147,17 @@ jobs:
             --version "${VERSION}" \
             --create-namespace \
             --timeout 2m \
-            --namespace trento \
-            --set trento-web.adminUser.password=admin-test-password \
-            --set trento-web.image.pullPolicy=Always \
-            --set trento-wanda.image.pullPolicy=Always \
-            --set trento-wanda.checks.image.pullPolicy=Always \
-            --set trento-mcp-server.enabled=true \
-            --set trento-mcp-server.image.pullPolicy=Always \
-            --set global.trentoWeb.origin=trento-test.local \
-            --set prometheus.enabled=false \
-            -f hack/cert-manager/override-values.yaml
+            ${HELM_COMMON_FLAGS}
 
       - name: Check pod status after install
         if: always()
         run: bash .github/scripts/upgrade-test.sh post-install-diagnostics
 
-      - name: Build chart dependencies for current dev chart
+      - name: Build dependencies for current dev chart
         run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+          helm repo add jetstack https://charts.jetstack.io
+          helm repo update
           helm dependency build charts/trento-server
 
       - name: Compare container versions (before upgrade)
@@ -146,16 +168,7 @@ jobs:
           helm upgrade -i trento-server charts/trento-server --wait \
             --timeout 3m \
             --debug \
-            --namespace trento \
-            --set trento-web.adminUser.password=admin-test-password \
-            --set trento-web.image.pullPolicy=Always \
-            --set trento-wanda.image.pullPolicy=Always \
-            --set trento-wanda.checks.image.pullPolicy=Always \
-            --set trento-mcp-server.enabled=true \
-            --set trento-mcp-server.image.pullPolicy=Always \
-            --set global.trentoWeb.origin=trento-test.local \
-            --set prometheus.enabled=false \
-            -f hack/cert-manager/override-values.yaml \
+            ${HELM_COMMON_FLAGS} \
             --set trento-web.image.tag=rolling \
             --set trento-wanda.image.tag=rolling \
             --set trento-wanda.checks.image.tag=rolling \
