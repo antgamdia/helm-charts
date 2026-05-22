@@ -45,6 +45,12 @@ UPDATED_FILES=()
 while IFS= read -r -d '' chart_file; do
   log_info "Checking: $chart_file"
 
+  # Skip Chart.yaml - contains Helm dependency metadata, not runtime image configs
+  if [[ "$(basename "$chart_file")" == "Chart.yaml" ]]; then
+    log_info "  → Chart metadata, skipping"
+    continue
+  fi
+
   # For template files: only update if they have HARDCODED full image reference
   # (skips files that only reference the image indirectly via {{ .Values }})
   # For values.yaml: update if file references the image
@@ -80,7 +86,8 @@ while IFS= read -r -d '' chart_file; do
     "$chart_file"
 
   # Only track file if content actually changed (not just because sed ran successfully)
-  if ! cmp -s "${chart_file}.bak" "$chart_file"; then
+  # Use diff instead of cmp to ignore line ending differences from sed
+  if ! diff -q "${chart_file}.bak" "$chart_file" >/dev/null 2>&1; then
     rm "${chart_file}.bak"
     UPDATED_FILES+=("$chart_file")
     log_success "  ✓ Updated: $chart_file"
