@@ -66,15 +66,21 @@ IFS='|' read -r current_version current_suffix <<< "$(parse_version "$CURRENT_TA
 
 log_info "Current version: $current_version, suffix: '$current_suffix'"
 
-# Find compatible tags (matching suffix, higher version)
-COMPATIBLE_TAGS=()
-SKIPPED_COUNT=0
+# Find highest compatible tag (matching suffix, higher version)
+# Since tags are sorted highest-first, we take the first match
+TARGET_TAG=""
+CHECKED=0
+
 for tag in "${TAG_ARRAY[@]}"; do
+  ((CHECKED++))
+
+  # Parse tag
+  tag_version=""
+  tag_suffix=""
   IFS='|' read -r tag_version tag_suffix <<< "$(parse_version "$tag")"
 
   # Skip if version is not numeric
   if [[ ! "$tag_version" =~ ^[0-9] ]]; then
-    ((SKIPPED_COUNT++))
     continue
   fi
 
@@ -88,36 +94,42 @@ for tag in "${TAG_ARRAY[@]}"; do
   # Check if this tag is newer than current
   compare_semver "$tag_version" "$current_version"
   cmp_result=$?
+
   if [ $cmp_result -eq 1 ]; then
-    # tag_version > current_version
-    COMPATIBLE_TAGS+=("$tag")
+    # tag_version > current_version (and tags are sorted descending)
+    # So this is the highest compatible version
+    TARGET_TAG="$tag"
+    break
+  fi
+
+  # Stop if we've checked enough tags (optimization for large registries)
+  if [ $CHECKED -gt 500 ]; then
+    log_warning "Stopped checking after 500 tags (registry has many tags)"
+    break
   fi
 done
 
-COMPATIBLE_COUNT=${#COMPATIBLE_TAGS[@]}
-if [ "$COMPATIBLE_COUNT" -eq 0 ]; then
+COMPATIBLE_COUNT=0
+if [ -n "$TARGET_TAG" ]; then
+  COMPATIBLE_COUNT=1
+  log_info "Found compatible upgrade: $TARGET_TAG"
+else
   log_warning "No compatible upgrades found"
-  log_info "  Checked $TAG_COUNT total tags (skipped $SKIPPED_COUNT non-numeric versions)"
+  log_info "  Checked $CHECKED of $TAG_COUNT total tags"
   log_info "  Current: version=$current_version, suffix='$current_suffix'"
   if [ "${#TAG_ARRAY[@]}" -gt 0 ]; then
     log_info "  Sample tags: ${TAG_ARRAY[0]} ${TAG_ARRAY[1]:-} ${TAG_ARRAY[2]:-}"
   fi
-else
-  log_info "Found $COMPATIBLE_COUNT compatible upgrades"
 fi
 
-# === DETERMINE TARGET VERSION ===
-TARGET_TAG=""
+# === DETERMINE UPGRADE STATUS ===
 UPGRADE_AVAILABLE="false"
 SKIP="false"
 
-if [ $COMPATIBLE_COUNT -gt 0 ]; then
-  # Take the highest compatible version (first in our sorted list)
-  TARGET_TAG="${COMPATIBLE_TAGS[0]}"
+if [ -n "$TARGET_TAG" ]; then
   UPGRADE_AVAILABLE="true"
-  log_success "Target upgrade: $TARGET_TAG"
+  log_success "Upgrade available: $TARGET_TAG"
 else
-  log_info "No upgrade available (already latest compatible version)"
   SKIP="true"
 fi
 
