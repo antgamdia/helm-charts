@@ -86,9 +86,11 @@ log_info "Parsed: base=$BASE_IMAGE, tag=$CURRENT_TAG"
 
 # Check if tag starts with a number (semantic version)
 HAS_SEMANTIC_VERSION="true"
+SKIP="false"
 if ! [[ "$CURRENT_TAG" =~ ^[0-9] ]]; then
   log_warning "Non-semantic version tag: $CURRENT_TAG (skipping remediation)"
   HAS_SEMANTIC_VERSION="false"
+  SKIP="true"
 fi
 
 # Extract CVEs from SARIF
@@ -114,9 +116,12 @@ output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
 log_success "SARIF analysis complete"
 log_info "Found $(echo "$OUTPUT_JSON" | jq '.cves | length') CVEs"
 
-# Exit with skip code if non-semantic version
-if [ "$HAS_SEMANTIC_VERSION" = "false" ]; then
-  exit 2
+# Set output variables for workflow
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+  if [ "$SKIP" = "true" ]; then
+    echo "skip_reason=non-semantic-version" >> "$GITHUB_OUTPUT"
+  fi
 fi
 
 exit 0

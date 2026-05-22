@@ -55,7 +55,8 @@ if verify_image_exists "$FULL_IMAGE_REF"; then
   DIGEST=$(skopeo inspect "docker://$FULL_IMAGE_REF" 2>/dev/null | jq -r '.Digest' || echo "unknown")
 else
   log_error "Image verification failed: $FULL_IMAGE_REF"
-  exit 1
+  VERIFIED="false"
+  DIGEST=""
 fi
 
 # === OUTPUT RESULT ===
@@ -71,5 +72,10 @@ OUTPUT_JSON=$(jq -n \
 
 output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
 
-log_success "Verification complete"
-exit 0
+if [ "$VERIFIED" = "true" ]; then
+  log_success "Verification complete"
+  exit 0
+else
+  log_error "Verification failed - image cannot be accessed"
+  exit 1
+fi

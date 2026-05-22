@@ -97,7 +97,7 @@ fi
 # === COMMIT CHANGES ===
 if [ -z "$UPDATED_FILES" ]; then
   log_warning "No files to update in PR"
-  git checkout main >/dev/null 2>&1
+  git checkout main >/dev/null 2>&1 || true
   git branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
 
   OUTPUT_JSON=$(jq -n '{
@@ -108,7 +108,7 @@ if [ -z "$UPDATED_FILES" ]; then
   }')
 
   output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
-  exit 2
+  exit 0
 fi
 
 # Stage updated files
@@ -129,7 +129,7 @@ fi
 # Commit changes
 if ! git commit -m "$COMMIT_MSG" >/dev/null 2>&1; then
   log_warning "Nothing to commit (no changes)"
-  git checkout main >/dev/null 2>&1
+  git checkout main >/dev/null 2>&1 || true
   git branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
 
   OUTPUT_JSON=$(jq -n '{
@@ -140,7 +140,7 @@ if ! git commit -m "$COMMIT_MSG" >/dev/null 2>&1; then
   }')
 
   output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
-  exit 2
+  exit 0
 fi
 
 # Push branch

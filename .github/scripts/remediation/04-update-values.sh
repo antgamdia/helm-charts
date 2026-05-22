@@ -105,6 +105,12 @@ if [ $UPDATE_COUNT -gt 0 ]; then
 
   output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
   log_success "Updated $UPDATE_COUNT values files"
+
+  # Set output for workflow
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "files_updated=$UPDATE_COUNT" >> "$GITHUB_OUTPUT"
+  fi
+
   exit 0
 else
   log_warning "No values files found or no updates needed"
@@ -116,5 +122,11 @@ else
   }')
 
   output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
-  exit 2
+
+  # Set output for workflow
+  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+    echo "files_updated=0" >> "$GITHUB_OUTPUT"
+  fi
+
+  exit 0
 fi

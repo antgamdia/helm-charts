@@ -110,13 +110,15 @@ compare_semver() {
 # List all tags for a container image (newest first)
 # Uses skopeo to query registry
 # Input: image_ref (e.g., "docker.io/library/busybox")
-# Output: newline-separated tags (one per line)
+# Output: newline-separated tags (one per line, sorted newest first)
 list_image_tags() {
   local image_ref="$1"
 
   # Use skopeo to list tags from the registry
+  # Note: jq's reverse + .[] gives us newest first
+  # We sort them with -V (version sort) to get semantic versions ordered correctly
   if ! skopeo list-tags "docker://${image_ref}" 2>/dev/null | \
-       jq -r '.Tags | reverse | .[]' | sort -V; then
+       jq -r '.Tags[]' | sort -V -r; then
     log_warning "Failed to list tags for $image_ref"
     return 1
   fi

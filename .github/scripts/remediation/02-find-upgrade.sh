@@ -40,14 +40,25 @@ log_info "Finding upgrades for: $BASE_IMAGE:$CURRENT_TAG"
 log_info "Querying registry for available tags..."
 
 # Get all available tags
-if ! ALL_TAGS=$(list_image_tags "$BASE_IMAGE" 2>/dev/null); then
+ALL_TAGS=$(list_image_tags "$BASE_IMAGE" 2>/dev/null) || {
   log_error "Failed to query registry for $BASE_IMAGE"
+  exit 1
+}
+
+# Validate we got some tags
+if [ -z "$ALL_TAGS" ]; then
+  log_error "No tags returned from registry for $BASE_IMAGE"
   exit 1
 fi
 
 # Convert to array for processing
 mapfile -t TAG_ARRAY <<< "$ALL_TAGS"
-log_info "Found ${#TAG_ARRAY[@]} total tags"
+TAG_COUNT=${#TAG_ARRAY[@]}
+if [ "$TAG_COUNT" -eq 0 ]; then
+  log_error "Failed to parse tags from registry output"
+  exit 1
+fi
+log_info "Found $TAG_COUNT total tags"
 
 # === FIND COMPATIBLE VERSIONS ===
 # Parse current tag to get suffix (e.g., "-alpine", "-management")
@@ -57,11 +68,13 @@ log_info "Current version: $current_version, suffix: '$current_suffix'"
 
 # Find compatible tags (matching suffix, higher version)
 COMPATIBLE_TAGS=()
+SKIPPED_COUNT=0
 for tag in "${TAG_ARRAY[@]}"; do
   IFS='|' read -r tag_version tag_suffix <<< "$(parse_version "$tag")"
 
   # Skip if version is not numeric
   if [[ ! "$tag_version" =~ ^[0-9] ]]; then
+    ((SKIPPED_COUNT++))
     continue
   fi
 
@@ -74,18 +87,29 @@ for tag in "${TAG_ARRAY[@]}"; do
 
   # Check if this tag is newer than current
   compare_semver "$tag_version" "$current_version"
-  if [ $? -eq 1 ]; then
+  cmp_result=$?
+  if [ $cmp_result -eq 1 ]; then
     # tag_version > current_version
     COMPATIBLE_TAGS+=("$tag")
   fi
 done
 
 COMPATIBLE_COUNT=${#COMPATIBLE_TAGS[@]}
-log_info "Found $COMPATIBLE_COUNT compatible upgrades (matching suffix)"
+if [ "$COMPATIBLE_COUNT" -eq 0 ]; then
+  log_warning "No compatible upgrades found"
+  log_info "  Checked $TAG_COUNT total tags (skipped $SKIPPED_COUNT non-numeric versions)"
+  log_info "  Current: version=$current_version, suffix='$current_suffix'"
+  if [ "${#TAG_ARRAY[@]}" -gt 0 ]; then
+    log_info "  Sample tags: ${TAG_ARRAY[0]} ${TAG_ARRAY[1]:-} ${TAG_ARRAY[2]:-}"
+  fi
+else
+  log_info "Found $COMPATIBLE_COUNT compatible upgrades"
+fi
 
 # === DETERMINE TARGET VERSION ===
 TARGET_TAG=""
 UPGRADE_AVAILABLE="false"
+SKIP="false"
 
 if [ $COMPATIBLE_COUNT -gt 0 ]; then
   # Take the highest compatible version (first in our sorted list)
@@ -94,6 +118,7 @@ if [ $COMPATIBLE_COUNT -gt 0 ]; then
   log_success "Target upgrade: $TARGET_TAG"
 else
   log_info "No upgrade available (already latest compatible version)"
+  SKIP="true"
 fi
 
 # === OUTPUT RESULT ===
@@ -111,11 +136,14 @@ OUTPUT_JSON=$(jq -n \
 
 output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
 
-# Exit with appropriate code
-if [ "$UPGRADE_AVAILABLE" = "true" ]; then
-  log_success "Upgrade available"
-  exit 0
-else
-  log_info "No upgrade needed"
-  exit 2
+# Set output variables for workflow
+if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
+  echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
+  if [ "$SKIP" = "true" ]; then
+    echo "skip_reason=already-latest" >> "$GITHUB_OUTPUT"
+  else
+    echo "target_version=$TARGET_TAG" >> "$GITHUB_OUTPUT"
+  fi
 fi
+
+exit 0
