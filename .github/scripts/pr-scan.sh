@@ -290,14 +290,7 @@ detect_mode() {
     fi
   fi
 
-  local has_changes
   detect_changed_images "$pr_images" "$main_images"
-  has_changes=$?
-
-  local images
-  images=$(jq -c '.images' "$OUTPUT_IMAGES_FILE")
-  echo "has_changes=$([ $has_changes -eq 0 ] && echo 'true' || echo 'false')" >> "$GITHUB_OUTPUT"
-  echo "images=$images" >> "$GITHUB_OUTPUT"
 
   rm -f "$pr_images" "$main_images" 2>/dev/null || true
 
