@@ -4,10 +4,12 @@
 name: Continuous Integration
 
 on:
-  push:
-    branches:
-      - "main"
-  pull_request:
+  # Disabled for CI development in personal fork
+  # push:
+  #   branches:
+  #     - "main"
+  # pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
