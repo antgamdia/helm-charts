@@ -91,7 +91,8 @@ generate_comment() {
         echo ""
         echo "### 📦 \`${image}\`"
         echo ""
-        echo "**Found $cve_count CVEs:**"
+        echo "**Found $cve_count CVEs**"
+        echo ""
       } >> "$OUTPUT_COMMENT_FILE"
 
       # Group by severity
@@ -99,14 +100,19 @@ generate_comment() {
         local severity_count=$(jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\")] | length" "$scan_file" 2>/dev/null || echo "0")
         if [ "$severity_count" -gt 0 ]; then
           {
-            echo ""
-            echo "#### $severity ($severity_count)"
+            echo "<details><summary><strong>$severity ($severity_count)</strong></summary>"
             echo ""
             echo "| CVE ID | Package | Installed | Fixed |"
             echo "|--------|---------|-----------|-------|"
           } >> "$OUTPUT_COMMENT_FILE"
 
           jq -r ".Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\") | \"| [\(.VulnerabilityID)](https://nvd.nist.gov/vuln/detail/\(.VulnerabilityID)) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // \"N/A\") |\"" "$scan_file" >> "$OUTPUT_COMMENT_FILE"
+
+          {
+            echo ""
+            echo "</details>"
+            echo ""
+          } >> "$OUTPUT_COMMENT_FILE"
         fi
       done
     else
