@@ -2,8 +2,9 @@
 # Generate SBOM and ImagesLock reports from scan artifacts
 set -euo pipefail
 
-REPORTS_DIR="${1:-reports}"
-CHARTS_DIR="${2:-charts}"
+COMMAND="${1:-all}"
+REPORTS_DIR="${2:-reports}"
+CHARTS_DIR="${3:-charts}"
 
 log_info() { echo "ℹ️  $*"; }
 log_success() { echo "✅ $*"; }
@@ -76,10 +77,26 @@ EOF
 }
 
 main() {
-  log_info "Starting report generation"
-
-  merge_sboms "$REPORTS_DIR" "${REPORTS_DIR}/sbom.cyclonedx.json"
-  generate_images_lock "$REPORTS_DIR" "$CHARTS_DIR" "${REPORTS_DIR}/images-lock.yaml"
+  case "$COMMAND" in
+    sbom)
+      log_info "Generating SBOM report"
+      merge_sboms "$REPORTS_DIR" "${REPORTS_DIR}/sbom.cyclonedx.json"
+      ;;
+    imageslock)
+      log_info "Generating ImagesLock report"
+      generate_images_lock "$REPORTS_DIR" "$CHARTS_DIR" "${REPORTS_DIR}/images-lock.yaml"
+      ;;
+    all)
+      log_info "Generating all reports"
+      merge_sboms "$REPORTS_DIR" "${REPORTS_DIR}/sbom.cyclonedx.json"
+      generate_images_lock "$REPORTS_DIR" "$CHARTS_DIR" "${REPORTS_DIR}/images-lock.yaml"
+      ;;
+    *)
+      log_error "Unknown command: $COMMAND"
+      log_error "Usage: $0 {sbom|imageslock|all} [reports_dir] [charts_dir]"
+      exit 1
+      ;;
+  esac
 
   log_success "Report generation completed"
 }
