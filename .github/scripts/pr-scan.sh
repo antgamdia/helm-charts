@@ -67,8 +67,12 @@ detect_changed_images() {
   images_array="${images_array}]"
 
   local total=$(echo "$images_array" | jq 'length')
+
   if [ "$total" -eq 0 ]; then
-    echo '{"has_changes": false, "images": []}' > "$OUTPUT_IMAGES_FILE"
+    echo '{"has_changes": false, "images_metadata": []}' > "$OUTPUT_IMAGES_FILE"
+    echo "has_changes=false" >> "$GITHUB_OUTPUT"
+    echo "images=[]" >> "$GITHUB_OUTPUT"
+    log_info "No changed images detected"
     return 1
   else
     # Save full metadata for later use in comment generation
@@ -80,6 +84,10 @@ detect_changed_images() {
     echo "images=$images_only" >> "$GITHUB_OUTPUT"
 
     log_success "Found $total changed images"
+    echo ""
+    echo "Changed images:"
+    echo "$images_array" | jq -r '.[] | "  - \(.image) (\(.type))\(if .old_version then " [from: \(.old_version)]" else "" end)"'
+    echo ""
     return 0
   fi
 }
@@ -237,6 +245,9 @@ detect_mode() {
 
   log_info "Extracting images from PR branch"
   extract_images > "$pr_images"
+  echo "PR images:"
+  cat "$pr_images" | sed 's/^/  /'
+  echo ""
 
   # Get images from main branch for comparison
   log_info "Extracting images from main branch"
@@ -272,6 +283,10 @@ detect_mode() {
     rm -f "$pr_images" "$main_images" 2>/dev/null || true
     return 1
   fi
+
+  echo "Main branch images:"
+  cat "$main_images" | sed 's/^/  /'
+  echo ""
 
   if ! git checkout -; then
     log_error "Failed to return to PR branch"
