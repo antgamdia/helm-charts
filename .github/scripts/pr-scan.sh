@@ -23,6 +23,7 @@ detect_changed_images() {
 
   log_info "Detecting changed images"
 
+  # Extract images that are in PR but not in main (new), or have different tags
   local new_images=$(comm -23 "$pr_images_file" "$main_images_file")
 
   local base_changed=$(comm -12 \
@@ -116,11 +117,9 @@ detect_mode() {
 
   local pr_images
   local main_images
-  local main_chart
 
   pr_images=$(mktemp) || return 1
   main_images=$(mktemp) || return 1
-  main_chart=$(mktemp -d) || return 1
 
   # Add Helm chart repositories from Chart.yaml
   grep "repository: http" charts/trento-server/Chart.yaml | sed 's/.*repository: //' | sort -u | while read -r repo_url; do
@@ -132,32 +131,25 @@ detect_mode() {
   log_info "Extracting images from PR branch"
   extract_images > "$pr_images"
 
-  # Extract main branch chart without checking out
-  log_info "Extracting chart from main branch"
+  # Get images from main branch for comparison
+  log_info "Extracting images from main branch"
 
-  git show origin/main:charts/trento-server/Chart.yaml > "$main_chart/Chart.yaml" 2>/dev/null || {
-    log_error "Failed to fetch Chart.yaml from origin/main"
+  # Stash PR changes, checkout main, extract images, restore
+  git stash 2>/dev/null || true
+  git checkout origin/main 2>/dev/null || {
+    log_error "Failed to checkout main branch"
+    git stash pop 2>/dev/null || true
     rm -f "$pr_images" "$main_images" 2>/dev/null || true
-    rm -rf "$main_chart" 2>/dev/null || true
     return 1
   }
 
-  git show origin/main:charts/trento-server/values.yaml > "$main_chart/values.yaml" 2>/dev/null || {
-    log_error "Failed to fetch values.yaml from origin/main"
-    rm -f "$pr_images" "$main_images" 2>/dev/null || true
-    rm -rf "$main_chart" 2>/dev/null || true
-    return 1
-  }
-
-  mkdir -p "$main_chart/templates"
-
-  # Build dependencies for main branch chart (skip repo update - already done)
-  helm dependency build "$main_chart" --skip-refresh 2>/dev/null || true
-
-  # Template main branch chart
-  helm template trento "$main_chart" \
+  helm template trento charts/trento-server/ \
     --set prometheus.server.auth.type=none \
     2>/dev/null | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u > "$main_images"
+
+  # Restore PR branch
+  git checkout - 2>/dev/null || true
+  git stash pop 2>/dev/null || true
 
   local has_changes
   detect_changed_images "$pr_images" "$main_images"
