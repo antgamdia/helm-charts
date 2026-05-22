@@ -71,7 +71,10 @@ while IFS= read -r -d '' chart_file; do
     DEP_REPO=$(yq eval ".dependencies[] | select(.name == \"$REPO_ONLY\") | .repository" "$chart_file" 2>/dev/null || echo "")
 
     if [ -n "$DEP_REPO" ] && [ "$DEP_REPO" != "null" ]; then
-      LATEST=$(helm search repo "$DEP_REPO/$REPO_ONLY" 2>/dev/null | awk 'NR==2 {print $2}' || echo "")
+      # Add the repo and search for latest version
+      REPO_ALIAS="repo-$(echo "$DEP_REPO" | md5sum | cut -c1-8)"
+      helm repo add "$REPO_ALIAS" "$DEP_REPO" 2>/dev/null || true
+      LATEST=$(helm search repo "$REPO_ALIAS/$REPO_ONLY" 2>/dev/null | awk 'NR==2 {print $2}' || echo "")
       if [ -n "$LATEST" ]; then
         VERSION_CONSTRAINT="^${LATEST}"
         yq eval "(.dependencies[] | select(.name == \"$REPO_ONLY\") | .version) |= \"$VERSION_CONSTRAINT\"" -i "$chart_file"
