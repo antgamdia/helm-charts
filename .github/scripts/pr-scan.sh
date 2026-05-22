@@ -29,17 +29,17 @@ detect_changed_images() {
 
   log_info "Detecting changed images"
 
-  # Build image objects with version info
-  local images_array="[]"
+  # Build image objects with version info (deduplicated by image name)
+  declare -A images_map
 
   # Extract images that are in PR but not in main (new)
   local new_images=$(comm -23 "$pr_images_file" "$main_images_file")
   while IFS= read -r image; do
     [ -z "$image" ] && continue
-    images_array=$(echo "$images_array" | jq --arg img "$image" '. += [{image: $img, type: "new"}]')
+    images_map["$image"]='{"image":"'"$image"'","type":"new"}'
   done <<< "$new_images"
 
-  # Extract images with changed tags (updated)
+  # Extract images with changed tags (updated) - only if not already marked as new
   local base_changed=$(comm -12 \
     <(cat "$pr_images_file" | sed -E 's/:.*//g' | sort -u) \
     <(cat "$main_images_file" | sed -E 's/:.*//g' | sort -u))
@@ -48,17 +48,37 @@ detect_changed_images() {
     [ -z "$base_image" ] && continue
     local pr_tag=$(grep -F "${base_image}:" "$pr_images_file" | head -1 || true)
     local main_tag=$(grep -F "${base_image}:" "$main_images_file" | head -1 || true)
-    if [ "$pr_tag" != "$main_tag" ] && [ -n "$pr_tag" ]; then
-      images_array=$(echo "$images_array" | jq --arg img "$pr_tag" --arg old "$main_tag" '. += [{image: $img, type: "updated", old_version: $old}]')
+    if [ "$pr_tag" != "$main_tag" ] && [ -n "$pr_tag" ] && [ -z "${images_map[$pr_tag]}" ]; then
+      images_map["$pr_tag"]='{"image":"'"$pr_tag"'","type":"updated","old_version":"'"$main_tag"'"}'
     fi
   done <<< "$base_changed"
+
+  # Convert map to array
+  local images_array="["
+  local first=true
+  for image_entry in "${!images_map[@]}"; do
+    if [ "$first" = true ]; then
+      images_array="${images_array}${images_map[$image_entry]}"
+      first=false
+    else
+      images_array="${images_array},${images_map[$image_entry]}"
+    fi
+  done
+  images_array="${images_array}]"
 
   local total=$(echo "$images_array" | jq 'length')
   if [ "$total" -eq 0 ]; then
     echo '{"has_changes": false, "images": []}' > "$OUTPUT_IMAGES_FILE"
     return 1
   else
-    echo "{\"has_changes\": true, \"images\": $images_array}" > "$OUTPUT_IMAGES_FILE"
+    # Save full metadata for later use in comment generation
+    echo "{\"has_changes\": true, \"images_metadata\": $images_array}" > "$OUTPUT_IMAGES_FILE"
+
+    # Extract just image strings for the GitHub Actions matrix output
+    local images_only=$(echo "$images_array" | jq -c '[.[].image]')
+    echo "has_changes=true" >> "$GITHUB_OUTPUT"
+    echo "images=$images_only" >> "$GITHUB_OUTPUT"
+
     log_success "Found $total changed images"
     return 0
   fi
@@ -80,10 +100,10 @@ generate_comment() {
     scan_files+=("$file")
   done < <(find scan-results -name "*-trivy-results.json" -type f -print0 2>/dev/null)
 
-  # Get images from changed_images.json if it exists
-  local images_json="[]"
+  # Get images metadata from changed_images.json if it exists
+  local images_metadata="[]"
   if [ -f "$OUTPUT_IMAGES_FILE" ]; then
-    images_json=$(jq -c '.images' "$OUTPUT_IMAGES_FILE" 2>/dev/null || echo "[]")
+    images_metadata=$(jq -c '.images_metadata' "$OUTPUT_IMAGES_FILE" 2>/dev/null || echo "[]")
   fi
 
   # Process scan files, matching with images if available
@@ -97,14 +117,14 @@ generate_comment() {
       continue
     fi
 
-    # Get image info from JSON
+    # Get image info from metadata JSON
     local image=""
     local image_type="updated"
     local old_version=""
-    if [ $(echo "$images_json" | jq 'length') -gt $file_index ]; then
-      image=$(echo "$images_json" | jq -r ".[$file_index].image")
-      image_type=$(echo "$images_json" | jq -r ".[$file_index].type")
-      old_version=$(echo "$images_json" | jq -r ".[$file_index].old_version // empty")
+    if [ $(echo "$images_metadata" | jq 'length') -gt $file_index ]; then
+      image=$(echo "$images_metadata" | jq -r ".[$file_index].image")
+      image_type=$(echo "$images_metadata" | jq -r ".[$file_index].type")
+      old_version=$(echo "$images_metadata" | jq -r ".[$file_index].old_version // empty")
     else
       # Fallback: extract from artifact directory name
       image=$(basename "$(dirname "$scan_file")" | sed 's/trivy-scan-//')
@@ -165,7 +185,7 @@ generate_comment() {
         echo "No CVEs found."
       } >> "$OUTPUT_COMMENT_FILE"
     fi
-  done < <(find scan-results -name "*-trivy-results.json" -type f)
+  done
 
   if [ "$total_cves" -gt 0 ]; then
     {
