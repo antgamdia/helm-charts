@@ -41,8 +41,8 @@ detect_changed_images() {
   local updated_images=""
   while IFS= read -r base_image; do
     [ -z "$base_image" ] && continue
-    local pr_tag=$(grep "^${base_image}:" "$pr_images_file" | head -1 || true)
-    local main_tag=$(grep "^${base_image}:" "$main_images_file" | head -1 || true)
+    local pr_tag=$(grep -F "${base_image}:" "$pr_images_file" | head -1 || true)
+    local main_tag=$(grep -F "${base_image}:" "$main_images_file" | head -1 || true)
     if [ "$pr_tag" != "$main_tag" ] && [ -n "$pr_tag" ]; then
       updated_images="${updated_images}${pr_tag}"$'\n'
     fi
