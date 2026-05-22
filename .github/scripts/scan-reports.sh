@@ -15,17 +15,19 @@ merge_sboms() {
   local sbom_dir="$1"
   local output_file="$2"
 
-  cd "$sbom_dir"
-  local sbom_files=(*.sbom.json)
+  local sbom_files=()
+  while IFS= read -r -d '' file; do
+    sbom_files+=("$file")
+  done < <(find "$sbom_dir" -name "*-sbom.json" -type f -print0)
 
-  [ -e "${sbom_files[0]}" ] || { log_error "No SBOM files found in $sbom_dir"; return 1; }
+  [ ${#sbom_files[@]} -gt 0 ] || { log_error "No SBOM files found in $sbom_dir"; return 1; }
 
   log_info "Found ${#sbom_files[@]} SBOM files to merge"
 
   cp "${sbom_files[0]}" "$output_file"
 
   for sbom in "${sbom_files[@]:1}"; do
-    log_info "Merging $sbom"
+    log_info "Merging $(basename "$sbom")"
     jq -s '.[0].components += .[1].components | .[0]' \
       "$output_file" "$sbom" > temp.json
     mv temp.json "$output_file"
@@ -57,8 +59,7 @@ chart:
 images: []
 EOF
 
-  cd "$sbom_dir"
-  for sbom in *-sbom.json; do
+  while IFS= read -r -d '' sbom; do
     local image_name=$(jq -r '.metadata.component.name' "$sbom")
     local purl=$(jq -r '.metadata.component.purl' "$sbom")
     local digest=$(echo "$purl" | sed -n 's/.*@\([^?]*\).*/\1/p')
@@ -71,7 +72,7 @@ EOF
     fi
 
     yq -i ".images += [{\"name\": \"$image_name\", \"image\": \"$image_name\", \"chart\": \"$chart_name\", \"digests\": [{\"digest\": \"$digest\", \"arch\": \"linux/$arch\"}]}]" "$output_file"
-  done
+  done < <(find "$sbom_dir" -name "*-sbom.json" -type f -print0)
 
   log_success "Generated $output_file"
 }
