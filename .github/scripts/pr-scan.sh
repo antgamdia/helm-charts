@@ -61,22 +61,6 @@ detect_changed_images() {
 }
 
 generate_comment() {
-  if [ ! -f "$OUTPUT_IMAGES_FILE" ]; then
-    log_error "No images file found: $OUTPUT_IMAGES_FILE"
-    return 1
-  fi
-
-  if ! jq empty "$OUTPUT_IMAGES_FILE" 2>/dev/null; then
-    log_error "Invalid JSON in $OUTPUT_IMAGES_FILE"
-    return 1
-  fi
-
-  local images_json=$(jq -r '.images[]?' "$OUTPUT_IMAGES_FILE")
-  if [ -z "$images_json" ]; then
-    log_warning "No images found in $OUTPUT_IMAGES_FILE"
-    return 1
-  fi
-
   log_info "Generating PR comment"
 
   {
@@ -86,63 +70,20 @@ generate_comment() {
 
   local total_cves=0
 
-  # Collect scan files in order
-  local -a scan_files
-  while IFS= read -r -d '' file; do
-    scan_files+=("$file")
-  done < <(find scan-results -name "*-trivy-results.json" -type f -print0)
+  # Find all scan result files in the directory
+  while IFS= read -r scan_file; do
+    [ -z "$scan_file" ] && continue
 
-  local image_index=0
-  while IFS= read -r image; do
-    [ -z "$image" ] && continue
-
-    log_info "Processing: $image"
-
-    if [ $image_index -ge ${#scan_files[@]} ]; then
-      log_error "Scan file not found for $image (index $image_index, only ${#scan_files[@]} files available)"
-      {
-        echo ""
-        echo "### ❌ \`${image}\`"
-        echo ""
-        echo "**Scan failed** — no results available."
-      } >> "$OUTPUT_COMMENT_FILE"
-      ((image_index++))
-      continue
-    fi
-
-    local scan_file="${scan_files[$image_index]}"
-    ((image_index++))
+    log_info "Processing: $scan_file"
 
     if [ ! -f "$scan_file" ]; then
-      log_error "Scan file not found: $scan_file"
-      {
-        echo ""
-        echo "### ❌ \`${image}\`"
-        echo ""
-        echo "**Scan failed** — no results available."
-      } >> "$OUTPUT_COMMENT_FILE"
       continue
     fi
 
-    local scan_output
-    if ! scan_output=$(cat "$scan_file"); then
-      log_error "Failed to read scan file: $scan_file"
-      continue
-    fi
+    # Extract image name from filename
+    local image=$(basename "$(dirname "$scan_file")" | sed 's/trivy-scan-//')
 
-    if ! jq empty <<< "$scan_output" 2>/dev/null; then
-      log_error "Invalid JSON in scan file: $scan_file"
-      {
-        echo ""
-        echo "### ❌ \`${image}\`"
-        echo ""
-        echo "**Scan results corrupted** — invalid JSON."
-      } >> "$OUTPUT_COMMENT_FILE"
-      continue
-    fi
-
-    local cve_count
-    cve_count=$(echo "$scan_output" | jq '[.Results[]?.Vulnerabilities[]?] | length' 2>/dev/null || echo "0")
+    local cve_count=$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$scan_file" 2>/dev/null || echo "0")
     total_cves=$((total_cves + cve_count))
 
     if [ "$cve_count" -gt 0 ]; then
@@ -150,30 +91,47 @@ generate_comment() {
         echo ""
         echo "### 📦 \`${image}\`"
         echo ""
-        echo "**Found $cve_count CVEs (CRITICAL/HIGH/MEDIUM):**"
-        echo ""
-        echo "| CVE ID | Severity | Package | Installed | Fixed |"
-        echo "|--------|----------|---------|-----------|-------|"
+        echo "**Found $cve_count CVEs:**"
       } >> "$OUTPUT_COMMENT_FILE"
 
-      echo "$scan_output" | jq -r '.Results[]?.Vulnerabilities[]? | "| [\(.VulnerabilityID)](https://nvd.nist.gov/vuln/detail/\(.VulnerabilityID)) | \(.Severity) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // "N/A") |"' >> "$OUTPUT_COMMENT_FILE" 2>/dev/null || true
+      # Group by severity
+      for severity in "CRITICAL" "HIGH" "MEDIUM" "LOW"; do
+        local severity_count=$(jq "[.Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\")] | length" "$scan_file" 2>/dev/null || echo "0")
+        if [ "$severity_count" -gt 0 ]; then
+          {
+            echo ""
+            echo "#### $severity ($severity_count)"
+            echo ""
+            echo "| CVE ID | Package | Installed | Fixed |"
+            echo "|--------|---------|-----------|-------|"
+          } >> "$OUTPUT_COMMENT_FILE"
+
+          jq -r ".Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\") | \"| [\(.VulnerabilityID)](https://nvd.nist.gov/vuln/detail/\(.VulnerabilityID)) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // \"N/A\") |\"" "$scan_file" >> "$OUTPUT_COMMENT_FILE"
+        fi
+      done
     else
       {
         echo ""
         echo "### ✅ \`${image}\`"
         echo ""
-        echo "No CVEs found (CRITICAL/HIGH/MEDIUM)."
+        echo "No CVEs found."
       } >> "$OUTPUT_COMMENT_FILE"
     fi
-  done <<< "$images_json"
+  done < <(find scan-results -name "*-trivy-results.json" -type f)
 
   if [ "$total_cves" -gt 0 ]; then
     {
       echo ""
       echo "### Summary"
-      echo "**⚠️ Total: $total_cves CVEs detected in changed images**"
+      echo "**⚠️ Total: $total_cves CVEs detected**"
     } | cat - "$OUTPUT_COMMENT_FILE" > comment_temp.md
     mv comment_temp.md "$OUTPUT_COMMENT_FILE"
+  else
+    {
+      echo ""
+      echo "✅ **No CVEs detected in changed images**"
+      echo ""
+    } >> "$OUTPUT_COMMENT_FILE"
   fi
 
   log_success "Generated comment in $OUTPUT_COMMENT_FILE"
