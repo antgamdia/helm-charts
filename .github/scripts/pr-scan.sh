@@ -44,11 +44,12 @@ detect_changed_images() {
     local pr_tag=$(grep -F "${base_image}:" "$pr_images_file" | head -1 || true)
     local main_tag=$(grep -F "${base_image}:" "$main_images_file" | head -1 || true)
     if [ "$pr_tag" != "$main_tag" ] && [ -n "$pr_tag" ]; then
-      updated_images="${updated_images}${pr_tag}"$'\n'
+      updated_images+="$pr_tag"$'\n'
     fi
   done <<< "$base_changed"
 
-  local all_changed=$(echo -e "${new_images}${updated_images}" | grep -v '^$' | sort -u)
+  local all_changed
+  all_changed=$(printf "%s\n" "$new_images" "$updated_images" | grep -v '^$' | sort -u)
 
   if [ -z "$all_changed" ]; then
     echo '{"has_changes": false, "images": []}' > "$OUTPUT_IMAGES_FILE"
