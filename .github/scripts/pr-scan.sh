@@ -184,13 +184,13 @@ detect_mode() {
   # Extract main branch chart without checking out
   log_info "Extracting chart from main branch"
 
-  gh api "repos/$GITHUB_REPOSITORY/contents/charts/trento-server/Chart.yaml?ref=main" --jq .content 2>/dev/null | base64 -d > "$main_chart/Chart.yaml" || {
+  git show main:charts/trento-server/Chart.yaml > "$main_chart/Chart.yaml" 2>/dev/null || {
     log_error "Failed to fetch Chart.yaml from main branch"
     rm -rf "$main_chart"
     return 1
   }
 
-  gh api "repos/$GITHUB_REPOSITORY/contents/charts/trento-server/values.yaml?ref=main" --jq .content 2>/dev/null | base64 -d > "$main_chart/values.yaml" || {
+  git show main:charts/trento-server/values.yaml > "$main_chart/values.yaml" 2>/dev/null || {
     log_error "Failed to fetch values.yaml from main branch"
     rm -rf "$main_chart"
     return 1

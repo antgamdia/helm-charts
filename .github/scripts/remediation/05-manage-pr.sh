@@ -143,6 +143,12 @@ if [ "$CVE_COUNT" -gt 0 ]; then
 Addresses $CVE_COUNT security vulnerabilities"
 fi
 
+# TODO: disable when ready to create the official PR
+# Temporary git config for commit (will be overridden by ghaction-import-gpg if enabled)
+git config --global user.name "trentobot"
+git config --global user.email "trentobot@suse.com"
+
+
 git commit -m "$COMMIT_MSG" || {
   log_error "Commit failed"
   git checkout main || true
