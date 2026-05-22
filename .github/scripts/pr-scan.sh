@@ -135,18 +135,15 @@ detect_mode() {
   # Extract main branch chart without checking out
   log_info "Extracting chart from main branch"
 
-  # Ensure main branch is available (may be shallow clone in PR)
-  git fetch origin main 2>/dev/null || true
-
   git show origin/main:charts/trento-server/Chart.yaml > "$main_chart/Chart.yaml" 2>/dev/null || {
-    log_error "Failed to fetch Chart.yaml from main branch"
+    log_error "Failed to fetch Chart.yaml from origin/main"
     rm -f "$pr_images" "$main_images" 2>/dev/null || true
     rm -rf "$main_chart" 2>/dev/null || true
     return 1
   }
 
   git show origin/main:charts/trento-server/values.yaml > "$main_chart/values.yaml" 2>/dev/null || {
-    log_error "Failed to fetch values.yaml from main branch"
+    log_error "Failed to fetch values.yaml from origin/main"
     rm -f "$pr_images" "$main_images" 2>/dev/null || true
     rm -rf "$main_chart" 2>/dev/null || true
     return 1
