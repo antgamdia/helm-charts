@@ -100,18 +100,21 @@ fi
 # Extract CVEs from SARIF
 mapfile -t CVE_ARRAY < <(extract_cves_from_sarif "$SARIF_FILE")
 
+# Convert CVE array to JSON array format
+CVE_JSON=$(printf '%s\n' "${CVE_ARRAY[@]}" | jq -Rs 'split("\n") | map(select(length > 0))')
+
 # Build output JSON
 OUTPUT_JSON=$(jq -n \
   --arg image_ref "$IMAGE_REF" \
   --arg base_image "$BASE_IMAGE" \
   --arg current_tag "$CURRENT_TAG" \
   --argjson has_semantic "$HAS_SEMANTIC_VERSION" \
-  --arg cves "$(printf '%s\n' "${CVE_ARRAY[@]}" | jq -Rs '@json' | tr -d '"')" \
+  --argjson cves "$CVE_JSON" \
   '{
     "image_ref": $image_ref,
     "base_image": $base_image,
     "current_tag": $current_tag,
-    "cves": ($cves | split("\n") | map(select(length > 0))),
+    "cves": $cves,
     "has_semantic_version": ($has_semantic | not | not)
   }')
 

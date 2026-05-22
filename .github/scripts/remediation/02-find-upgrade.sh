@@ -51,14 +51,23 @@ if [ -z "$ALL_TAGS" ]; then
   exit 1
 fi
 
-# Convert to array for processing
-mapfile -t TAG_ARRAY <<< "$ALL_TAGS"
-TAG_COUNT=${#TAG_ARRAY[@]}
-if [ "$TAG_COUNT" -eq 0 ]; then
+# Store raw tag count
+TAG_COUNT=$(echo "$ALL_TAGS" | wc -l)
+
+# Optimization: only process first 500 tags (since sorted newest-first)
+# Use awk instead of head to avoid SIGPIPE when skopeo outputs many tags
+TAGS_TO_CHECK=$(echo "$ALL_TAGS" | awk 'NR<=500')
+mapfile -t TAG_ARRAY <<< "$TAGS_TO_CHECK"
+
+CHECKED_COUNT=${#TAG_ARRAY[@]}
+
+if [ "$CHECKED_COUNT" -eq 0 ]; then
   log_error "Failed to parse tags from registry output"
   exit 1
 fi
+
 log_info "Found $TAG_COUNT total tags"
+log_info "Checking first $CHECKED_COUNT tags (optimization for large registries)"
 
 # === FIND COMPATIBLE VERSIONS ===
 # Parse current tag to get suffix (e.g., "-alpine", "-management")
@@ -69,45 +78,53 @@ log_info "Current version: $current_version, suffix: '$current_suffix'"
 # Find highest compatible tag (matching suffix, higher version)
 # Since tags are sorted highest-first, we take the first match
 TARGET_TAG=""
-CHECKED=0
 
-# Limit iterations to avoid timeout on large registries
-max_check=500
-if [ "$TAG_COUNT" -lt 500 ]; then
-  max_check="$TAG_COUNT"
-fi
+for tag in "${TAG_ARRAY[@]}"; do
+  # Parse tag safely
+  parse_output=$(parse_version "$tag" 2>/dev/null) || {
+    log_error "Failed to parse version from tag: $tag"
+    continue
+  }
 
-for ((i=0; i<max_check && i<${#TAG_ARRAY[@]}; i++)); do
-  tag="${TAG_ARRAY[$i]}"
-  ((CHECKED++))
-
-  # Parse tag
-  parse_output=$(parse_version "$tag")
+  # Extract version and suffix using parameter expansion
   tag_version="${parse_output%|*}"
   tag_suffix="${parse_output#*|}"
 
-  # Skip if version is not numeric
-  if [[ ! "$tag_version" =~ ^[0-9] ]]; then
+  # Skip if version is empty or not numeric
+  if [[ -z "$tag_version" ]] || [[ ! "$tag_version" =~ ^[0-9] ]]; then
     continue
   fi
 
-  # If current has a suffix, only match tags with same suffix
-  if [[ -n "$current_suffix" ]]; then
-    if [[ "$tag_suffix" != "$current_suffix" ]]; then
-      continue
+  # Check if this tag is newer than current version
+  # compare_semver returns: 0=equal, 1=v1>v2, 2=v1<v2
+  # Use || true to prevent set -e from exiting on non-zero return
+  cmp_result=$(compare_semver "$tag_version" "$current_version" || echo $?)
+
+  # If tag_version > current_version
+  if [ "$cmp_result" = "1" ]; then
+    # Suffix matching: prefer exact match or empty suffix
+    # If current has NO suffix, prefer tags with NO suffix first
+    # If current has a suffix, prefer tags with SAME suffix first
+    if [[ -z "$current_suffix" ]]; then
+      # Current has no suffix - prefer tags with no suffix
+      if [[ -z "$tag_suffix" ]]; then
+        TARGET_TAG="$tag"
+        log_info "Found compatible upgrade (exact match): $TARGET_TAG"
+        break
+      elif [[ -z "$TARGET_TAG" ]]; then
+        # No exact match yet, store this as fallback
+        TARGET_TAG="$tag"
+        log_info "Found compatible upgrade (fallback with suffix): $TARGET_TAG"
+        continue
+      fi
+    else
+      # Current has a suffix - only match tags with same suffix
+      if [[ "$tag_suffix" == "$current_suffix" ]]; then
+        TARGET_TAG="$tag"
+        log_info "Found compatible upgrade (suffix match): $TARGET_TAG"
+        break
+      fi
     fi
-  fi
-
-  # Check if this tag is newer than current
-  compare_semver "$tag_version" "$current_version"
-  cmp_result=$?
-
-  if [ $cmp_result -eq 1 ]; then
-    # tag_version > current_version (and tags are sorted descending)
-    # So this is the highest compatible version
-    TARGET_TAG="$tag"
-    log_info "Found upgrade on iteration $CHECKED: $TARGET_TAG"
-    break
   fi
 done
 
@@ -116,7 +133,7 @@ if [ -n "$TARGET_TAG" ]; then
   SKIP="false"
 else
   log_warning "No compatible upgrades found"
-  log_info "  Checked $CHECKED of $TAG_COUNT total tags"
+  log_info "  Checked $CHECKED_COUNT of $TAG_COUNT total tags"
   log_info "  Current: version=$current_version, suffix='$current_suffix'"
   if [ "${#TAG_ARRAY[@]}" -gt 0 ]; then
     log_info "  Sample tags: ${TAG_ARRAY[0]} ${TAG_ARRAY[1]:-} ${TAG_ARRAY[2]:-}"

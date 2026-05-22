@@ -115,10 +115,10 @@ list_image_tags() {
   local image_ref="$1"
 
   # Use skopeo to list tags from the registry
-  # Note: jq's reverse + .[] gives us newest first
-  # We sort them with -V (version sort) to get semantic versions ordered correctly
+  # Filter to only numeric-starting tags (semantic versions), then sort newest first
+  # This removes SHA256 digests and other non-version tags
   if ! skopeo list-tags "docker://${image_ref}" 2>/dev/null | \
-       jq -r '.Tags[]' | sort -V -r; then
+       jq -r '.Tags[]' | grep -E '^[0-9vV]' | sort -V -r; then
     log_warning "Failed to list tags for $image_ref"
     return 1
   fi
