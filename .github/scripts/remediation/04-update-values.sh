@@ -12,31 +12,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
-
-# === INPUT VALIDATION ===
-if [ $# -lt 4 ]; then
-  log_error "Usage: $0 <image-analysis-json> <upgrade-plan-json> <charts-dir> <output-json>"
-  exit 1
-fi
 
 ANALYSIS_FILE="$1"
 UPGRADE_FILE="$2"
 CHARTS_DIR="$3"
 OUTPUT_FILE="$4"
-
-# Check dependencies
-check_deps jq yq find grep || exit 1
-
-# Validate inputs
-validate_json "$ANALYSIS_FILE" "Image analysis" || exit 1
-validate_json "$UPGRADE_FILE" "Upgrade plan" || exit 1
-
-if [ ! -d "$CHARTS_DIR" ]; then
-  log_error "Charts directory not found: $CHARTS_DIR"
-  exit 1
-fi
 
 # === EXTRACT DATA ===
 BASE_IMAGE=$(jq -r '.base_image' "$ANALYSIS_FILE")

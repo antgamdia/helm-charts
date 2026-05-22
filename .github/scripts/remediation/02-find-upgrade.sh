@@ -12,25 +12,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
-
-# === INPUT VALIDATION ===
-if [ $# -lt 2 ]; then
-  log_error "Usage: $0 <image-analysis-json> <output-json>"
-  exit 1
-fi
 
 INPUT_FILE="$1"
 OUTPUT_FILE="$2"
 
-# Check dependencies
-check_deps jq skopeo || exit 1
-
-# Validate input
-validate_json "$INPUT_FILE" "Image analysis" || exit 1
-
-# === EXTRACT INPUT DATA ===
 BASE_IMAGE=$(jq -r '.base_image' "$INPUT_FILE")
 CURRENT_TAG=$(jq -r '.current_tag' "$INPUT_FILE")
 

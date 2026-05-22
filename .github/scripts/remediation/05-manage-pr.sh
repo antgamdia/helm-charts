@@ -15,27 +15,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-# === INPUT VALIDATION ===
-if [ $# -lt 4 ]; then
-  log_error "Usage: $0 <image-analysis-json> <upgrade-plan-json> <values-updates-json> <output-json>"
-  exit 1
-fi
-
 ANALYSIS_FILE="$1"
 UPGRADE_FILE="$2"
 VALUES_FILE="$3"
 OUTPUT_FILE="$4"
-
-# Check environment and dependencies
-: "${GITHUB_REPOSITORY:?Error: GITHUB_REPOSITORY environment variable not set}"
-: "${GITHUB_TOKEN:?Error: GITHUB_TOKEN environment variable not set}"
-
-check_deps jq git gh || exit 1
-
-# Validate inputs
-validate_json "$ANALYSIS_FILE" "Image analysis" || exit 1
-validate_json "$UPGRADE_FILE" "Upgrade plan" || exit 1
-validate_json "$VALUES_FILE" "Values updates" || exit 1
 
 # === EXTRACT DATA ===
 IMAGE_REF=$(jq -r '.image_ref' "$ANALYSIS_FILE")
@@ -44,11 +27,6 @@ CURRENT_TAG=$(jq -r '.current_tag' "$ANALYSIS_FILE")
 TARGET_TAG=$(jq -r '.target_tag' "$UPGRADE_FILE")
 CVE_ARRAY=$(jq -r '.cves[]?' "$ANALYSIS_FILE" | head -c 500)
 UPDATED_FILES=$(jq -r '.updated_files[]?' "$VALUES_FILE")
-
-if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "null" ]; then
-  log_error "No target tag in upgrade plan"
-  exit 1
-fi
 
 # Extract image name (last component after /)
 IMAGE_NAME="${BASE_IMAGE##*/}"

@@ -12,37 +12,21 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
 source "$SCRIPT_DIR/common.sh"
 
-# === INPUT VALIDATION ===
-if [ $# -lt 2 ]; then
-  log_error "Usage: $0 <sarif-results-dir> <output-json>"
-  exit 1
-fi
+# Extract SARIF results and CVE IDs
+extract_cves_from_sarif() {
+  local sarif_file="$1"
+  jq -r '.runs[]? | .results[]? | .ruleId' "$sarif_file" 2>/dev/null | \
+    grep -E '^CVE-' | sort -u || echo ""
+}
 
 SARIF_DIR="$1"
 OUTPUT_FILE="$2"
 
-# Check dependencies
-check_deps jq find || exit 1
-
-# Check input directory exists
-if [ ! -d "$SARIF_DIR" ]; then
-  log_error "SARIF results directory not found: $SARIF_DIR"
-  exit 1
-fi
-
-# === MAIN LOGIC ===
 log_info "Analyzing SARIF files in: $SARIF_DIR"
 
-# Find SARIF file (there should be exactly one per matrix iteration)
 mapfile -t sarif_files < <(find "$SARIF_DIR" -name "*.sarif" -type f)
-
-if [ ${#sarif_files[@]} -eq 0 ]; then
-  log_error "No SARIF files found in $SARIF_DIR"
-  exit 1
-fi
 
 # Use the first (and typically only) SARIF file
 SARIF_FILE="${sarif_files[0]}"
@@ -58,10 +42,6 @@ fi
 
 IMAGE_INFO_FILE="${image_info_files[0]}"
 log_info "Using image info: $(basename "$IMAGE_INFO_FILE")"
-
-# Validate JSON files
-validate_json "$SARIF_FILE" "SARIF" || exit 1
-validate_json "$IMAGE_INFO_FILE" "Image info" || exit 1
 
 # Extract image reference from image-info.json
 IMAGE_REF=$(jq -r '.image' "$IMAGE_INFO_FILE")
