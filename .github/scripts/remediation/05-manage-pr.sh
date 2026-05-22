@@ -69,6 +69,14 @@ git checkout main || {
   exit 1
 }
 
+# Stash any uncommitted changes from previous steps (e.g., from step 4)
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  log_info "Stashing uncommitted changes from previous steps..."
+  git stash || {
+    log_warning "Could not stash changes"
+  }
+fi
+
 git pull origin main || {
   log_warning "Could not pull latest main"
 }
@@ -81,20 +89,40 @@ BRANCH_NAME=$(echo "$BRANCH_NAME" | sed 's/-\+/-/g' | sed 's/-$//')
 
 log_info "Using branch: $BRANCH_NAME"
 
-# Check if branch already exists locally
+# Check if branch already exists locally or remotely
+BRANCH_EXISTS_LOCAL=0
+BRANCH_EXISTS_REMOTE=0
+
 if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
-  log_info "Branch exists locally, checking for existing PR"
-  git checkout "$BRANCH_NAME" || {
-    log_error "Failed to checkout existing branch"
-    exit 1
-  }
-else
-  log_info "Creating new branch"
-  git checkout -b "$BRANCH_NAME" || {
-    log_error "Failed to create branch"
-    exit 1
-  }
+  BRANCH_EXISTS_LOCAL=1
 fi
+
+if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
+  BRANCH_EXISTS_REMOTE=1
+fi
+
+if [ $BRANCH_EXISTS_LOCAL -eq 1 ] || [ $BRANCH_EXISTS_REMOTE -eq 1 ]; then
+  log_info "Branch '$BRANCH_NAME' already exists (local: $BRANCH_EXISTS_LOCAL, remote: $BRANCH_EXISTS_REMOTE)"
+  log_warning "Skipping PR creation to avoid overwriting potential manual changes"
+
+  OUTPUT_JSON=$(jq -n \
+    --arg branch "$BRANCH_NAME" \
+    '{
+      "pr_number": null,
+      "pr_url": null,
+      "action_taken": "branch_exists",
+      "branch_name": $branch
+    }')
+
+  output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
+  exit 0
+fi
+
+log_info "Creating new branch"
+git checkout -b "$BRANCH_NAME" || {
+  log_error "Failed to create branch"
+  exit 1
+}
 
 # === COMMIT CHANGES ===
 if [ -z "$UPDATED_FILES" ]; then
