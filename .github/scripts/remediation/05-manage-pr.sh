@@ -48,16 +48,28 @@ log_info "Creating PR for: $IMAGE_NAME ($CURRENT_TAG → $TARGET_TAG)"
 # === GIT SETUP ===
 log_info "Configuring git..."
 
-git config --local user.name "github-actions[bot]" 2>/dev/null || true
-git config --local user.email "github-actions[bot]@users.noreply.github.com" 2>/dev/null || true
+# Validate we have a git repository
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  log_error "Not in a git repository - required for git operations"
+  exit 1
+fi
+
+# Check if we can access the remote
+if ! git remote -v >/dev/null 2>&1; then
+  log_error "No git remote configured"
+  exit 1
+fi
+
+git config --local user.name "github-actions[bot]" || true
+git config --local user.email "github-actions[bot]@users.noreply.github.com" || true
 
 # Ensure we're on a clean main branch
-git checkout main >/dev/null 2>&1 || {
+git checkout main || {
   log_error "Failed to checkout main branch"
   exit 1
 }
 
-git pull origin main >/dev/null 2>&1 || {
+git pull origin main || {
   log_warning "Could not pull latest main"
 }
 
@@ -72,13 +84,13 @@ log_info "Using branch: $BRANCH_NAME"
 # Check if branch already exists locally
 if git rev-parse --verify "$BRANCH_NAME" >/dev/null 2>&1; then
   log_info "Branch exists locally, checking for existing PR"
-  git checkout "$BRANCH_NAME" >/dev/null 2>&1 || {
+  git checkout "$BRANCH_NAME" || {
     log_error "Failed to checkout existing branch"
     exit 1
   }
 else
   log_info "Creating new branch"
-  git checkout -b "$BRANCH_NAME" >/dev/null 2>&1 || {
+  git checkout -b "$BRANCH_NAME" || {
     log_error "Failed to create branch"
     exit 1
   }
@@ -87,8 +99,8 @@ fi
 # === COMMIT CHANGES ===
 if [ -z "$UPDATED_FILES" ]; then
   log_warning "No files to update in PR"
-  git checkout main >/dev/null 2>&1 || true
-  git branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
+  git checkout main || true
+  git branch -D "$BRANCH_NAME" || true
 
   OUTPUT_JSON=$(jq -n '{
     "pr_number": null,
@@ -102,23 +114,20 @@ if [ -z "$UPDATED_FILES" ]; then
 fi
 
 # Stage updated files
+STAGED_COUNT=0
 while IFS= read -r file; do
-  [ -n "$file" ] && git add "$file"
+  if [ -n "$file" ]; then
+    if git add "$file" 2>/dev/null; then
+      STAGED_COUNT=$((STAGED_COUNT + 1))
+      log_info "  Staged: $file"
+    else
+      log_warning "  Could not stage: $file (may not exist)"
+    fi
+  fi
 done <<< "$UPDATED_FILES"
 
-# Build commit message
-COMMIT_MSG="[CVE Fix] Update $IMAGE_NAME to $TARGET_TAG"
-
-CVE_COUNT=$(jq '.cves | length' "$ANALYSIS_FILE")
-if [ "$CVE_COUNT" -gt 0 ]; then
-  COMMIT_MSG+="
-
-Addresses $CVE_COUNT security vulnerabilities"
-fi
-
-# Commit changes
-if ! git commit -m "$COMMIT_MSG" >/dev/null 2>&1; then
-  log_warning "Nothing to commit (no changes)"
+if [ $STAGED_COUNT -eq 0 ]; then
+  log_warning "No files were staged for commit"
   git checkout main >/dev/null 2>&1 || true
   git branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
 
@@ -133,11 +142,53 @@ if ! git commit -m "$COMMIT_MSG" >/dev/null 2>&1; then
   exit 0
 fi
 
+# Build commit message
+COMMIT_MSG="[CVE Fix] Update $IMAGE_NAME to $TARGET_TAG"
+
+CVE_COUNT=$(jq '.cves | length' "$ANALYSIS_FILE")
+if [ "$CVE_COUNT" -gt 0 ]; then
+  COMMIT_MSG+="
+
+Addresses $CVE_COUNT security vulnerabilities"
+fi
+
+# Commit changes
+COMMIT_OUTPUT=$(git commit -m "$COMMIT_MSG" 2>&1)
+COMMIT_EXIT=$?
+
+if [ $COMMIT_EXIT -ne 0 ]; then
+  log_warning "Commit failed: $COMMIT_OUTPUT"
+  git checkout main || true
+  git branch -D "$BRANCH_NAME" || true
+
+  OUTPUT_JSON=$(jq -n '{
+    "pr_number": null,
+    "pr_url": null,
+    "action_taken": "no_changes",
+    "branch_name": null
+  }')
+
+  output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
+  exit 0
+fi
+
+log_info "Committed: $COMMIT_MSG"
+
 # Push branch
-if ! git push -u origin "$BRANCH_NAME" >/dev/null 2>&1; then
+log_info "Pushing branch to origin..."
+PUSH_OUTPUT=$(git push -u origin "$BRANCH_NAME" 2>&1)
+PUSH_EXIT=$?
+
+if [ $PUSH_EXIT -ne 0 ]; then
   log_error "Failed to push branch"
-  git checkout main >/dev/null 2>&1
-  git branch -D "$BRANCH_NAME" >/dev/null 2>&1 || true
+  log_error "Push output: $PUSH_OUTPUT"
+
+  # Show git status for debugging
+  log_info "Git status at failure:"
+  git status
+
+  git checkout main || true
+  git branch -D "$BRANCH_NAME" || true
   exit 1
 fi
 
@@ -252,5 +303,6 @@ if [ $PR_EXIT -eq 0 ]; then
   exit 0
 else
   log_error "Failed to create PR: $PR_OUTPUT"
+  git checkout main || true
   exit 1
 fi
