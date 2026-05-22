@@ -2,10 +2,18 @@
 # Detect changed images in PR and generate CVE comment
 set -euo pipefail
 
-SCAN_RESULTS_DIR="${1:-scan-results}"
-OUTPUT_IMAGES_FILE="${2:-changed_images.json}"
-OUTPUT_COMMENT_FILE="${3:-comment.md}"
-MODE="${4:-detect}"
+# Handle both old and new calling conventions
+if [ $# -eq 0 ] || [ "$1" = "detect" ] || [ "$1" = "comment" ]; then
+  MODE="${1:-detect}"
+  OUTPUT_IMAGES_FILE="changed_images.json"
+  OUTPUT_COMMENT_FILE="comment.md"
+  SCAN_RESULTS_DIR="scan-results"
+else
+  SCAN_RESULTS_DIR="${1:-scan-results}"
+  OUTPUT_IMAGES_FILE="${2:-changed_images.json}"
+  OUTPUT_COMMENT_FILE="${3:-comment.md}"
+  MODE="${4:-detect}"
+fi
 
 log_info() { echo "ℹ️  $*"; }
 log_success() { echo "✅ $*"; }
@@ -169,8 +177,44 @@ comment_mode() {
   log_success "Comment generated"
 }
 
+post_mode() {
+  log_info "Posting comment to PR"
+
+  if [ ! -s comment.md ]; then
+    log_info "No comment to post"
+    exit 0
+  fi
+
+  PR_NUMBER="${PR_NUMBER:-}"
+  if [ -z "$PR_NUMBER" ]; then
+    log_error "PR_NUMBER not set"
+    exit 1
+  fi
+
+  # Check if bot already commented with CVE Scan Results
+  COMMENT_ID=$(gh pr view "$PR_NUMBER" \
+    --json comments \
+    --jq '.comments[] | select(.author.isBot and .body | contains("CVE Scan Results")) | .id' 2>/dev/null | head -1 || echo "")
+
+  if [ -n "$COMMENT_ID" ]; then
+    if gh pr comment "$PR_NUMBER" --edit "$COMMENT_ID" --body-file comment.md 2>/dev/null; then
+      log_success "Updated existing comment"
+    else
+      log_info "Updating failed, creating new comment"
+      gh pr comment "$PR_NUMBER" --body-file comment.md 2>/dev/null || log_error "Failed to post comment"
+    fi
+  else
+    if gh pr comment "$PR_NUMBER" --body-file comment.md 2>/dev/null; then
+      log_success "Created new comment"
+    else
+      log_error "Failed to post comment"
+    fi
+  fi
+}
+
 case "$MODE" in
   detect) detect_mode ;;
   comment) comment_mode ;;
-  *) log_error "Unknown mode: $MODE. Use 'detect' or 'comment'"; exit 1 ;;
+  post) post_mode ;;
+  *) log_error "Unknown mode: $MODE. Use 'detect', 'comment', or 'post'"; exit 1 ;;
 esac
