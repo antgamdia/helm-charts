@@ -201,10 +201,13 @@ detect_mode() {
 
   mkdir -p "$main_chart/templates"
 
+  # Build dependencies for main branch chart
+  helm dependency build "$main_chart" 2>/dev/null || true
+
   # Template main branch chart
   helm template trento "$main_chart" \
     --set prometheus.server.auth.type=none \
-    | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u > "$main_images"
+    2>/dev/null | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u > "$main_images"
 
   rm -rf "$main_chart"
 
