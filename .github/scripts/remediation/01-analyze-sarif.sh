@@ -69,28 +69,32 @@ log_info "Image reference: $IMAGE_REF"
 
 # Parse image reference into components
 # Format: [registry/][repository/]name[:tag]
-if [[ "$IMAGE_REF" =~ ^(.*/)([^/:]+)(:.+)?$ ]]; then
-  BASE_IMAGE="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
-  CURRENT_TAG="${IMAGE_REF#*:}"
-  # If no tag separator, tag is whole image minus registry/name
-  if [[ "$CURRENT_TAG" == "$IMAGE_REF" ]]; then
-    CURRENT_TAG="latest"
-  fi
+# Extract everything before the last colon as base, everything after as tag
+if [[ "$IMAGE_REF" == *:* ]]; then
+  BASE_IMAGE="${IMAGE_REF%:*}"
+  CURRENT_TAG="${IMAGE_REF##*:}"
 else
-  # Simple name without registry
   BASE_IMAGE="$IMAGE_REF"
   CURRENT_TAG="latest"
 fi
 
 log_info "Parsed: base=$BASE_IMAGE, tag=$CURRENT_TAG"
 
-# Check if tag starts with a number (semantic version)
+# Check if tag is a semantic version using parse_version
+# This handles v-prefixed tags like v2.53.1 correctly
+parsed=$(parse_version "$CURRENT_TAG")
+IFS='|' read -r parsed_version parsed_suffix <<< "$parsed"
+
 HAS_SEMANTIC_VERSION="true"
 SKIP="false"
-if ! [[ "$CURRENT_TAG" =~ ^[0-9] ]]; then
+
+# If parse_version returned empty version (invalid), it's not semantic
+if [[ -z "$parsed_version" ]] || [[ ! "$parsed_version" =~ ^[0-9] ]]; then
   log_warning "Non-semantic version tag: $CURRENT_TAG (skipping remediation)"
   HAS_SEMANTIC_VERSION="false"
   SKIP="true"
+else
+  log_info "Semantic version detected: $parsed_version"
 fi
 
 # Extract CVEs from SARIF

@@ -71,13 +71,20 @@ log_info "Current version: $current_version, suffix: '$current_suffix'"
 TARGET_TAG=""
 CHECKED=0
 
-for tag in "${TAG_ARRAY[@]}"; do
+# Limit iterations to avoid timeout on large registries
+max_check=500
+if [ "$TAG_COUNT" -lt 500 ]; then
+  max_check="$TAG_COUNT"
+fi
+
+for ((i=0; i<max_check && i<${#TAG_ARRAY[@]}; i++)); do
+  tag="${TAG_ARRAY[$i]}"
   ((CHECKED++))
 
   # Parse tag
-  tag_version=""
-  tag_suffix=""
-  IFS='|' read -r tag_version tag_suffix <<< "$(parse_version "$tag")"
+  parse_output=$(parse_version "$tag")
+  tag_version="${parse_output%|*}"
+  tag_suffix="${parse_output#*|}"
 
   # Skip if version is not numeric
   if [[ ! "$tag_version" =~ ^[0-9] ]]; then
@@ -99,20 +106,14 @@ for tag in "${TAG_ARRAY[@]}"; do
     # tag_version > current_version (and tags are sorted descending)
     # So this is the highest compatible version
     TARGET_TAG="$tag"
-    break
-  fi
-
-  # Stop if we've checked enough tags (optimization for large registries)
-  if [ $CHECKED -gt 500 ]; then
-    log_warning "Stopped checking after 500 tags (registry has many tags)"
+    log_info "Found upgrade on iteration $CHECKED: $TARGET_TAG"
     break
   fi
 done
 
-COMPATIBLE_COUNT=0
 if [ -n "$TARGET_TAG" ]; then
-  COMPATIBLE_COUNT=1
-  log_info "Found compatible upgrade: $TARGET_TAG"
+  log_success "Upgrade available: $TARGET_TAG"
+  SKIP="false"
 else
   log_warning "No compatible upgrades found"
   log_info "  Checked $CHECKED of $TAG_COUNT total tags"
@@ -120,33 +121,40 @@ else
   if [ "${#TAG_ARRAY[@]}" -gt 0 ]; then
     log_info "  Sample tags: ${TAG_ARRAY[0]} ${TAG_ARRAY[1]:-} ${TAG_ARRAY[2]:-}"
   fi
-fi
-
-# === DETERMINE UPGRADE STATUS ===
-UPGRADE_AVAILABLE="false"
-SKIP="false"
-
-if [ -n "$TARGET_TAG" ]; then
-  UPGRADE_AVAILABLE="true"
-  log_success "Upgrade available: $TARGET_TAG"
-else
   SKIP="true"
 fi
 
 # === OUTPUT RESULT ===
-OUTPUT_JSON=$(jq -n \
-  --arg target_tag "$TARGET_TAG" \
-  --argjson upgrade_available "$UPGRADE_AVAILABLE" \
-  --argjson all_tags_count "${#TAG_ARRAY[@]}" \
-  --argjson compatible_tags_count "$COMPATIBLE_COUNT" \
-  '{
-    "target_tag": (($target_tag | length > 0) | if . then $target_tag else null end),
-    "upgrade_available": $upgrade_available,
-    "all_tags_count": $all_tags_count,
-    "compatible_tags_count": $compatible_tags_count
-  }')
+# Build JSON carefully with proper quoting
+if [ -n "$TARGET_TAG" ]; then
+  OUTPUT_JSON=$(cat <<EOF
+{
+  "target_tag": "$TARGET_TAG",
+  "upgrade_available": true,
+  "all_tags_count": $TAG_COUNT,
+  "compatible_tags_count": 1
+}
+EOF
+)
+else
+  OUTPUT_JSON=$(cat <<EOF
+{
+  "target_tag": null,
+  "upgrade_available": false,
+  "all_tags_count": $TAG_COUNT,
+  "compatible_tags_count": 0
+}
+EOF
+)
+fi
 
-output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
+# Validate and write JSON
+if ! echo "$OUTPUT_JSON" | jq . > "$OUTPUT_FILE" 2>/dev/null; then
+  log_error "Failed to write JSON output"
+  exit 1
+fi
+
+log_info "Output: $OUTPUT_FILE"
 
 # Set output variables for workflow
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
