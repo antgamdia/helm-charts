@@ -2,18 +2,9 @@
 # Detect changed images in PR and generate CVE comment
 set -euo pipefail
 
-# Handle both old and new calling conventions
-if [ $# -eq 0 ] || [ "$1" = "detect" ] || [ "$1" = "comment" ]; then
-  MODE="${1:-detect}"
-  OUTPUT_IMAGES_FILE="changed_images.json"
-  OUTPUT_COMMENT_FILE="comment.md"
-  SCAN_RESULTS_DIR="scan-results"
-else
-  SCAN_RESULTS_DIR="${1:-scan-results}"
-  OUTPUT_IMAGES_FILE="${2:-changed_images.json}"
-  OUTPUT_COMMENT_FILE="${3:-comment.md}"
-  MODE="${4:-detect}"
-fi
+MODE="${1:-detect}"
+OUTPUT_IMAGES_FILE="changed_images.json"
+OUTPUT_COMMENT_FILE="comment.md"
 
 log_info() { echo "ℹ️  $*"; }
 log_success() { echo "✅ $*"; }
@@ -63,7 +54,16 @@ detect_changed_images() {
 }
 
 generate_comment() {
-  local images_json=$(jq -r '.images[]?' "$OUTPUT_IMAGES_FILE")
+  if [ ! -f "$OUTPUT_IMAGES_FILE" ]; then
+    log_error "No images file found: $OUTPUT_IMAGES_FILE"
+    return 1
+  fi
+
+  local images_json=$(jq -r '.images[]?' "$OUTPUT_IMAGES_FILE" 2>/dev/null)
+  if [ -z "$images_json" ]; then
+    log_warning "No images found in $OUTPUT_IMAGES_FILE"
+    return 1
+  fi
 
   log_info "Generating PR comment"
 
