@@ -98,6 +98,10 @@ while IFS= read -r -d '' chart_file; do
   fi
 done < <(find "$CHARTS_DIR" -name "*.yaml" -type f -print0)
 
+# === CLEANUP ===
+# Remove any leftover backup files
+find "$CHARTS_DIR" -name "*.bak" -type f -delete
+
 # === OUTPUT RESULT ===
 UPDATE_COUNT=${#UPDATED_FILES[@]}
 
