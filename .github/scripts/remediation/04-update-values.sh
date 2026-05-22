@@ -67,12 +67,15 @@ while IFS= read -r -d '' chart_file; do
   cp "$chart_file" "${chart_file}.bak"
 
   if [[ "$(basename "$chart_file")" == "Chart.yaml" ]]; then
-    # Update Helm dependency version
     log_info "  → Updating Helm dependency version"
-    LATEST=$(helm search repo "$BASE_IMAGE" --json 2>/dev/null | jq -r '.[0].version' || echo "")
-    if [ -n "$LATEST" ] && [ "$LATEST" != "null" ]; then
-      VERSION_CONSTRAINT="^${LATEST}"
-      yq eval ".dependencies[] |= select(.name == \"$REPO_ONLY\" or .repository | contains(\"$REPO_ONLY\")) | .version = \"$VERSION_CONSTRAINT\"" -i "$chart_file"
+    DEP_REPO=$(yq eval ".dependencies[] | select(.name == \"$REPO_ONLY\") | .repository" "$chart_file" 2>/dev/null || echo "")
+
+    if [ -n "$DEP_REPO" ] && [ "$DEP_REPO" != "null" ]; then
+      LATEST=$(helm search repo "$DEP_REPO/$REPO_ONLY" 2>/dev/null | awk 'NR==2 {print $2}' || echo "")
+      if [ -n "$LATEST" ]; then
+        VERSION_CONSTRAINT="^${LATEST}"
+        yq eval "(.dependencies[] | select(.name == \"$REPO_ONLY\") | .version) |= \"$VERSION_CONSTRAINT\"" -i "$chart_file"
+      fi
     fi
   else
     # Update image references in values/template files
