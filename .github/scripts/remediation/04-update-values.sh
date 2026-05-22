@@ -45,11 +45,6 @@ UPDATED_FILES=()
 while IFS= read -r -d '' chart_file; do
   log_info "Checking: $chart_file"
 
-  # Skip Chart.yaml - contains Helm dependency metadata, not runtime image configs
-  if [[ "$(basename "$chart_file")" == "Chart.yaml" ]]; then
-    log_info "  → Chart metadata, skipping"
-    continue
-  fi
 
   # For template files: only update if they have HARDCODED full image reference
   # (skips files that only reference the image indirectly via {{ .Values }})
@@ -68,31 +63,34 @@ while IFS= read -r -d '' chart_file; do
     fi
   fi
 
-  log_info "  → Updating image"
-
   # Create backup
   cp "$chart_file" "${chart_file}.bak"
 
-  # Replace with strict specificity - only update the target image:
-  # Strategy 1: Full references (safest - exact match: docker.io/kubectl:v1.33.3)
-  # Strategy 2: Split YAML blocks containing the repository (find repo, then update its tag)
-  # Uses repository pattern matching to find the RIGHT image block, not just first one
+  if [[ "$(basename "$chart_file")" == "Chart.yaml" ]]; then
+    # Update Helm dependency version
+    log_info "  → Updating Helm dependency version"
+    LATEST=$(helm search repo "$BASE_IMAGE" --json 2>/dev/null | jq -r '.[0].version' || echo "")
+    if [ -n "$LATEST" ] && [ "$LATEST" != "null" ]; then
+      VERSION_CONSTRAINT="^${LATEST}"
+      yq eval ".dependencies[] |= select(.name == \"$REPO_ONLY\" or .repository | contains(\"$REPO_ONLY\")) | .version = \"$VERSION_CONSTRAINT\"" -i "$chart_file"
+    fi
+  else
+    # Update image references in values/template files
+    log_info "  → Updating image"
+    sed -i.bak \
+      -e "s|$CURRENT_IMAGE_REF|$TARGET_IMAGE_REF|g" \
+      -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: $CURRENT_TAG\$|tag: $TARGET_TAG|g" \
+      -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: \"$CURRENT_TAG\"|tag: \"$TARGET_TAG\"|g" \
+      -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: '$CURRENT_TAG'|tag: '$TARGET_TAG'|g" \
+      "$chart_file"
+  fi
 
-  sed -i.bak \
-    -e "s|$CURRENT_IMAGE_REF|$TARGET_IMAGE_REF|g" \
-    -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: $CURRENT_TAG\$|tag: $TARGET_TAG|g" \
-    -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: \"$CURRENT_TAG\"|tag: \"$TARGET_TAG\"|g" \
-    -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: '$CURRENT_TAG'|tag: '$TARGET_TAG'|g" \
-    "$chart_file"
-
-  # Only track file if content actually changed (not just because sed ran successfully)
-  # Use diff instead of cmp to ignore line ending differences from sed
+  # Only track file if content actually changed
   if ! diff -q "${chart_file}.bak" "$chart_file" >/dev/null 2>&1; then
     rm "${chart_file}.bak"
     UPDATED_FILES+=("$chart_file")
     log_success "  ✓ Updated: $chart_file"
   else
-    # No changes made - restore backup
     mv "${chart_file}.bak" "$chart_file"
     log_info "  → No changes applied to: $chart_file"
   fi
