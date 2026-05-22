@@ -181,7 +181,6 @@ fi
 
 # Create new PR
 PR_TITLE="[CVE Fix] Update $IMAGE_NAME to $TARGET_TAG"
-LABEL_SAFE="${BASE_IMAGE//[^a-zA-Z0-9-]/-}"
 
 # Build PR body
 PR_BODY="## Summary
@@ -236,8 +235,7 @@ fi
 # Create PR
 log_info "Creating PR: $PR_TITLE"
 
-PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" \
-     --label "cve-fix" --label "security" --label "automated" 2>/dev/null) || {
+PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --label "dependencies" 2>/dev/null) || {
   # Labels may not exist - try without them
   log_warning "Labels not found, creating PR without labels"
   PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY") || {
