@@ -29,33 +29,37 @@ detect_changed_images() {
 
   log_info "Detecting changed images"
 
-  # Extract images that are in PR but not in main (new), or have different tags
-  local new_images=$(comm -23 "$pr_images_file" "$main_images_file")
+  # Build image objects with version info
+  local images_array="[]"
 
+  # Extract images that are in PR but not in main (new)
+  local new_images=$(comm -23 "$pr_images_file" "$main_images_file")
+  while IFS= read -r image; do
+    [ -z "$image" ] && continue
+    images_array=$(echo "$images_array" | jq --arg img "$image" '. += [{image: $img, type: "new"}]')
+  done <<< "$new_images"
+
+  # Extract images with changed tags (updated)
   local base_changed=$(comm -12 \
     <(cat "$pr_images_file" | sed -E 's/:.*//g' | sort -u) \
     <(cat "$main_images_file" | sed -E 's/:.*//g' | sort -u))
 
-  local updated_images=""
   while IFS= read -r base_image; do
     [ -z "$base_image" ] && continue
     local pr_tag=$(grep -F "${base_image}:" "$pr_images_file" | head -1 || true)
     local main_tag=$(grep -F "${base_image}:" "$main_images_file" | head -1 || true)
     if [ "$pr_tag" != "$main_tag" ] && [ -n "$pr_tag" ]; then
-      updated_images+="$pr_tag"$'\n'
+      images_array=$(echo "$images_array" | jq --arg img "$pr_tag" --arg old "$main_tag" '. += [{image: $img, type: "updated", old_version: $old}]')
     fi
   done <<< "$base_changed"
 
-  local all_changed
-  all_changed=$(printf "%s\n" "$new_images" "$updated_images" | grep -v '^$' | sort -u)
-
-  if [ -z "$all_changed" ]; then
+  local total=$(echo "$images_array" | jq 'length')
+  if [ "$total" -eq 0 ]; then
     echo '{"has_changes": false, "images": []}' > "$OUTPUT_IMAGES_FILE"
     return 1
   else
-    local images_json=$(echo "$all_changed" | jq -R . | jq -s -c .)
-    echo "{\"has_changes\": true, \"images\": $images_json}" > "$OUTPUT_IMAGES_FILE"
-    log_success "Found $(echo "$all_changed" | wc -l) changed images"
+    echo "{\"has_changes\": true, \"images\": $images_array}" > "$OUTPUT_IMAGES_FILE"
+    log_success "Found $total changed images"
     return 0
   fi
 }
@@ -64,14 +68,27 @@ generate_comment() {
   log_info "Generating PR comment"
 
   {
-    echo "## 🔒 CVE Scan Results"
+    echo "## CVE Scan Results"
     echo ""
   } > "$OUTPUT_COMMENT_FILE"
 
   local total_cves=0
 
-  # Find all scan result files in the directory
-  while IFS= read -r scan_file; do
+  # Collect all scan files in order
+  local -a scan_files
+  while IFS= read -r -d '' file; do
+    scan_files+=("$file")
+  done < <(find scan-results -name "*-trivy-results.json" -type f -print0 2>/dev/null)
+
+  # Get images from changed_images.json if it exists
+  local images_json="[]"
+  if [ -f "$OUTPUT_IMAGES_FILE" ]; then
+    images_json=$(jq -c '.images' "$OUTPUT_IMAGES_FILE" 2>/dev/null || echo "[]")
+  fi
+
+  # Process scan files, matching with images if available
+  local file_index=0
+  for scan_file in "${scan_files[@]}"; do
     [ -z "$scan_file" ] && continue
 
     log_info "Processing: $scan_file"
@@ -80,8 +97,19 @@ generate_comment() {
       continue
     fi
 
-    # Extract image name from filename
-    local image=$(basename "$(dirname "$scan_file")" | sed 's/trivy-scan-//')
+    # Get image info from JSON
+    local image=""
+    local image_type="updated"
+    local old_version=""
+    if [ $(echo "$images_json" | jq 'length') -gt $file_index ]; then
+      image=$(echo "$images_json" | jq -r ".[$file_index].image")
+      image_type=$(echo "$images_json" | jq -r ".[$file_index].type")
+      old_version=$(echo "$images_json" | jq -r ".[$file_index].old_version // empty")
+    else
+      # Fallback: extract from artifact directory name
+      image=$(basename "$(dirname "$scan_file")" | sed 's/trivy-scan-//')
+    fi
+    ((file_index++))
 
     local cve_count=$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$scan_file" 2>/dev/null || echo "0")
     total_cves=$((total_cves + cve_count))
@@ -89,7 +117,14 @@ generate_comment() {
     if [ "$cve_count" -gt 0 ]; then
       {
         echo ""
-        echo "### 📦 \`${image}\`"
+        if [ "$image_type" = "new" ]; then
+          echo "### 🆕 NEW: \`${image}\`"
+        elif [ -n "$old_version" ]; then
+          echo "### 📦 \`${image}\`"
+          echo "**Updated from:** \`${old_version}\`"
+        else
+          echo "### 📦 \`${image}\`"
+        fi
         echo ""
         echo "**Found $cve_count CVEs**"
         echo ""
@@ -118,7 +153,14 @@ generate_comment() {
     else
       {
         echo ""
-        echo "### ✅ \`${image}\`"
+        if [ "$image_type" = "new" ]; then
+          echo "### ✅ NEW: \`${image}\`"
+        elif [ -n "$old_version" ]; then
+          echo "### ✅ \`${image}\`"
+          echo "**Updated from:** \`${old_version}\`"
+        else
+          echo "### ✅ \`${image}\`"
+        fi
         echo ""
         echo "No CVEs found."
       } >> "$OUTPUT_COMMENT_FILE"
@@ -139,6 +181,13 @@ generate_comment() {
       echo ""
     } >> "$OUTPUT_COMMENT_FILE"
   fi
+
+  # Add content hash for change detection
+  local content_hash=$(sha256sum "$OUTPUT_COMMENT_FILE" | cut -c1-8)
+  {
+    echo ""
+    echo "<!-- CVE scan hash: $content_hash -->"
+  } >> "$OUTPUT_COMMENT_FILE"
 
   log_success "Generated comment in $OUTPUT_COMMENT_FILE"
 }
@@ -255,17 +304,28 @@ post_mode() {
     exit 1
   fi
 
+  local new_hash=$(grep "CVE scan hash:" comment.md | grep -oP '\b[a-f0-9]{8}\b' | tail -1)
+
   # Check if bot already commented with CVE Scan Results
   COMMENT_ID=$(gh pr view "$PR_NUMBER" \
     --json comments \
     --jq '.comments[] | select(.author.isBot and .body | contains("CVE Scan Results")) | .id' 2>/dev/null | head -1 || echo "")
 
   if [ -n "$COMMENT_ID" ]; then
-    if gh pr comment "$PR_NUMBER" --edit "$COMMENT_ID" --body-file comment.md; then
-      log_success "Updated existing comment"
+    # Check if content actually changed by comparing hashes
+    local existing_hash=$(gh pr view "$PR_NUMBER" \
+      --json comments \
+      --jq ".comments[] | select(.id == $COMMENT_ID) | .body" 2>/dev/null | grep -oP '(?<=CVE scan hash: )[a-f0-9]{8}' | tail -1 || echo "")
+
+    if [ "$new_hash" != "$existing_hash" ]; then
+      if gh pr comment "$PR_NUMBER" --edit "$COMMENT_ID" --body-file comment.md; then
+        log_success "Updated existing comment (content changed)"
+      else
+        log_error "Failed to update existing comment"
+        return 1
+      fi
     else
-      log_error "Failed to update existing comment"
-      return 1
+      log_info "No changes detected, skipping update"
     fi
   else
     if gh pr comment "$PR_NUMBER" --body-file comment.md; then
