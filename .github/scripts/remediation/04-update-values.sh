@@ -72,19 +72,22 @@ while IFS= read -r -d '' chart_file; do
   # Strategy 2: Split YAML blocks containing the repository (find repo, then update its tag)
   # Uses repository pattern matching to find the RIGHT image block, not just first one
 
-  if sed -i.bak \
+  sed -i.bak \
     -e "s|$CURRENT_IMAGE_REF|$TARGET_IMAGE_REF|g" \
     -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: $CURRENT_TAG\$|tag: $TARGET_TAG|g" \
     -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: \"$CURRENT_TAG\"|tag: \"$TARGET_TAG\"|g" \
     -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: '$CURRENT_TAG'|tag: '$TARGET_TAG'|g" \
-    "$chart_file"; then
+    "$chart_file"
+
+  # Only track file if content actually changed (not just because sed ran successfully)
+  if ! cmp -s "${chart_file}.bak" "$chart_file"; then
     rm "${chart_file}.bak"
     UPDATED_FILES+=("$chart_file")
     log_success "  ✓ Updated: $chart_file"
   else
-    # Restore backup on failure
+    # No changes made - restore backup
     mv "${chart_file}.bak" "$chart_file"
-    log_error "  ✗ Failed to update: $chart_file"
+    log_info "  → No changes applied to: $chart_file"
   fi
 done < <(find "$CHARTS_DIR" -name "*.yaml" -type f -print0)
 
