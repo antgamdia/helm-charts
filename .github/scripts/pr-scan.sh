@@ -17,6 +17,12 @@ sanitize_image_name() {
   echo -n "$image" | md5sum | cut -c1-12
 }
 
+find_scan_file_for_image() {
+  local image="$1"
+  local safe_name=$(sanitize_image_name "$image")
+  find scan-results -path "*trivy-scan-${safe_name}/*-trivy-results.json" -type f | head -1
+}
+
 extract_images() {
   helm template trento charts/trento-server/ \
     --set prometheus.server.auth.type=none \
@@ -102,42 +108,29 @@ generate_comment() {
 
   local total_cves=0
 
-  # Collect all scan files in order
-  local -a scan_files
-  while IFS= read -r -d '' file; do
-    scan_files+=("$file")
-  done < <(find scan-results -name "*-trivy-results.json" -type f -print0 2>/dev/null)
-
   # Get images metadata from changed_images.json if it exists
   local images_metadata="[]"
   if [ -f "$OUTPUT_IMAGES_FILE" ]; then
     images_metadata=$(jq -c '.images_metadata' "$OUTPUT_IMAGES_FILE" 2>/dev/null || echo "[]")
   fi
 
-  # Process scan files, matching with images if available
-  local file_index=0
-  for scan_file in "${scan_files[@]}"; do
-    [ -z "$scan_file" ] && continue
+  # Process each image from metadata
+  while IFS= read -r image_json; do
+    [ -z "$image_json" ] && continue
 
-    log_info "Processing: $scan_file"
+    local image=$(echo "$image_json" | jq -r '.image')
+    local image_type=$(echo "$image_json" | jq -r '.type')
+    local old_version=$(echo "$image_json" | jq -r '.old_version // empty')
 
-    if [ ! -f "$scan_file" ]; then
+    log_info "Processing: $image"
+
+    # Find the scan file for this image by hash
+    local scan_file=$(find_scan_file_for_image "$image")
+
+    if [ -z "$scan_file" ] || [ ! -f "$scan_file" ]; then
+      log_error "Scan file not found for: $image"
       continue
     fi
-
-    # Get image info from metadata JSON
-    local image=""
-    local image_type="updated"
-    local old_version=""
-    if [ $(echo "$images_metadata" | jq 'length') -gt $file_index ]; then
-      image=$(echo "$images_metadata" | jq -r ".[$file_index].image")
-      image_type=$(echo "$images_metadata" | jq -r ".[$file_index].type")
-      old_version=$(echo "$images_metadata" | jq -r ".[$file_index].old_version // empty")
-    else
-      # Fallback: extract from artifact directory name
-      image=$(basename "$(dirname "$scan_file")" | sed 's/trivy-scan-//')
-    fi
-    ((file_index++))
 
     local cve_count=$(jq '[.Results[]?.Vulnerabilities[]?] | length' "$scan_file" 2>/dev/null || echo "0")
     total_cves=$((total_cves + cve_count))
@@ -193,7 +186,7 @@ generate_comment() {
         echo "No CVEs found."
       } >> "$OUTPUT_COMMENT_FILE"
     fi
-  done
+  done < <(echo "$images_metadata" | jq -c '.[]')
 
   if [ "$total_cves" -gt 0 ]; then
     {
