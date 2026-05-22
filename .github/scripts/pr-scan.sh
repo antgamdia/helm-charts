@@ -10,6 +10,7 @@ log_info() { echo "ℹ️  $*"; }
 log_success() { echo "✅ $*"; }
 log_warning() { echo "⚠️  $*"; }
 log_error() { echo "❌ $*" >&2; }
+log_debug() { [ "${DEBUG:-0}" = "1" ] && echo "🔍 $*" || true; }
 
 sanitize_image_name() {
   local image="$1"
@@ -85,19 +86,35 @@ generate_comment() {
 
   local total_cves=0
 
+  # Collect scan files in order
+  local -a scan_files
+  while IFS= read -r -d '' file; do
+    scan_files+=("$file")
+  done < <(find scan-results -name "*-trivy-results.json" -type f -print0)
+
+  local image_index=0
   while IFS= read -r image; do
     [ -z "$image" ] && continue
 
     log_info "Processing: $image"
 
-    local safe_name
-    safe_name=$(sanitize_image_name "$image")
+    if [ $image_index -ge ${#scan_files[@]} ]; then
+      log_error "Scan file not found for $image (index $image_index, only ${#scan_files[@]} files available)"
+      {
+        echo ""
+        echo "### ❌ \`${image}\`"
+        echo ""
+        echo "**Scan failed** — no results available."
+      } >> "$OUTPUT_COMMENT_FILE"
+      ((image_index++))
+      continue
+    fi
 
-    local scan_file
-    scan_file="scan-results/trivy-scan-${safe_name}/${safe_name}-trivy-results.json"
+    local scan_file="${scan_files[$image_index]}"
+    ((image_index++))
 
     if [ ! -f "$scan_file" ]; then
-      log_error "Scan file not found: $scan_file (expected for $image)"
+      log_error "Scan file not found: $scan_file"
       {
         echo ""
         echo "### ❌ \`${image}\`"
