@@ -28,6 +28,11 @@ log_info "Analyzing SARIF files in: $SARIF_DIR"
 
 mapfile -t sarif_files < <(find "$SARIF_DIR" -name "*.sarif" -type f)
 
+if [ ${#sarif_files[@]} -eq 0 ]; then
+  log_error "No SARIF files found in $SARIF_DIR"
+  exit 1
+fi
+
 # Use the first (and typically only) SARIF file
 SARIF_FILE="${sarif_files[0]}"
 log_info "Processing: $(basename "$SARIF_FILE")"

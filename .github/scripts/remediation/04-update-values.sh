@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Step 4: Update Values Files
-# Updates Helm chart values.yaml files with new image version
+# Step 4: Update Chart Files
+# Updates all Helm chart files (values.yaml and templates) with new image version
 #
 # Exit codes:
 #   0 = Success (files updated)
-#   1 = Error (file not found, yq failed)
+#   1 = Error (file not found, sed failed)
 #   2 = No files to update (image not referenced in charts)
 #
 # Usage: 04-update-values.sh <image-analysis-json> <upgrade-plan-json> <charts-dir> <output-json>
@@ -29,58 +29,64 @@ if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "null" ]; then
   exit 1
 fi
 
-log_info "Updating values files: $CURRENT_TAG → $TARGET_TAG"
+# Build full image references for search/replace
+CURRENT_IMAGE_REF="$BASE_IMAGE:$CURRENT_TAG"
+TARGET_IMAGE_REF="$BASE_IMAGE:$TARGET_TAG"
 
-# === FIND AND UPDATE VALUES FILES ===
+# Extract repository part (after last slash) for matching split image definitions
+REPO_ONLY="${BASE_IMAGE##*/}"
+
+log_info "Updating chart files: $CURRENT_TAG → $TARGET_TAG"
+
+# === FIND AND UPDATE CHART FILES ===
 UPDATED_FILES=()
 
-# Find all values.yaml files in charts directory
-while IFS= read -r -d '' values_file; do
-  log_info "Checking: $values_file"
+# Find all .yaml files in charts directory (values.yaml and templates)
+while IFS= read -r -d '' chart_file; do
+  log_info "Checking: $chart_file"
 
-  # Check if this file references the base image repository
-  if ! grep -q "$BASE_IMAGE" "$values_file"; then
+  # Check if file references the image (in any format: full or split)
+  if ! grep -qE "$BASE_IMAGE|$REPO_ONLY|$CURRENT_TAG" "$chart_file"; then
     log_info "  → Image not referenced, skipping"
     continue
   fi
 
-  log_info "  → Updating image tag"
+  log_info "  → Updating image"
 
   # Create backup
-  cp "$values_file" "${values_file}.bak"
+  cp "$chart_file" "${chart_file}.bak"
 
-  # Try to update with yq first (structured update)
-  if yq eval ".. |= (select(. == \"$CURRENT_TAG\") | \"$TARGET_TAG\")" "$values_file" > "${values_file}.tmp" 2>/dev/null; then
-    mv "${values_file}.tmp" "$values_file"
-    rm "${values_file}.bak"
-    UPDATED_FILES+=("$values_file")
-    log_success "  ✓ Updated: $values_file"
+  # Replace with strict specificity - only update the target image:
+  # Strategy 1: Full references (safest - exact match: docker.io/kubectl:v1.33.3)
+  # Strategy 2: Split YAML blocks containing the repository (find repo, then update its tag)
+  # Uses repository pattern matching to find the RIGHT image block, not just first one
+
+  if sed -i.bak \
+    -e "s|$CURRENT_IMAGE_REF|$TARGET_IMAGE_REF|g" \
+    -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: $CURRENT_TAG\$|tag: $TARGET_TAG|g" \
+    -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: \"$CURRENT_TAG\"|tag: \"$TARGET_TAG\"|g" \
+    -e "/repository:.*$REPO_ONLY/,/^[^ ]/ s|tag: '$CURRENT_TAG'|tag: '$TARGET_TAG'|g" \
+    "$chart_file"; then
+    rm "${chart_file}.bak"
+    UPDATED_FILES+=("$chart_file")
+    log_success "  ✓ Updated: $chart_file"
   else
-    # Fallback to sed for simple tag replacement
-    if sed -i.bak "s|$CURRENT_TAG|$TARGET_TAG|g" "$values_file"; then
-      rm "${values_file}.bak"
-      UPDATED_FILES+=("$values_file")
-      log_success "  ✓ Updated (sed): $values_file"
-    else
-      # Restore backup on failure
-      mv "${values_file}.bak" "$values_file"
-      log_error "  ✗ Failed to update: $values_file"
-    fi
+    # Restore backup on failure
+    mv "${chart_file}.bak" "$chart_file"
+    log_error "  ✗ Failed to update: $chart_file"
   fi
-done < <(find "$CHARTS_DIR" -name "values.yaml" -type f -print0)
+done < <(find "$CHARTS_DIR" -name "*.yaml" -type f -print0)
 
 # === OUTPUT RESULT ===
 UPDATE_COUNT=${#UPDATED_FILES[@]}
 
 if [ $UPDATE_COUNT -gt 0 ]; then
   # Build array of updated files
-  FILES_JSON=$(printf '%s\n' "${UPDATED_FILES[@]}" | jq -Rs @json | jq -s '.')
-
   OUTPUT_JSON=$(jq -n \
-    --argjson files "$FILES_JSON" \
+    --arg files "$(printf '%s\n' "${UPDATED_FILES[@]}")" \
     --argjson count "$UPDATE_COUNT" \
     '{
-      "updated_files": $files,
+      "updated_files": ($files | split("\n") | map(select(length > 0))),
       "update_count": $count
     }')
 

@@ -86,7 +86,7 @@ for tag in "${TAG_ARRAY[@]}"; do
   # Use || true to prevent set -e from exiting on non-zero return
   cmp_result=$(compare_semver "$tag_version" "$current_version" || echo $?)
 
-  # If tag_version > current_version
+  # Only consider tags that are NEWER (1 = tag > current, 0 = equal is not an upgrade)
   if [ "$cmp_result" = "1" ]; then
     # Suffix matching: prefer exact match or empty suffix
     # If current has NO suffix, prefer tags with NO suffix first
@@ -114,7 +114,7 @@ for tag in "${TAG_ARRAY[@]}"; do
   fi
 done
 
-if [ -n "$TARGET_TAG" ]; then
+if [ -n "$TARGET_TAG" ] && [ "$TARGET_TAG" != "$CURRENT_TAG" ]; then
   log_success "Upgrade available: $TARGET_TAG"
   SKIP="false"
 else
