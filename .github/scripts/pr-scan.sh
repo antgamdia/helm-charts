@@ -8,7 +8,13 @@ OUTPUT_COMMENT_FILE="comment.md"
 
 log_info() { echo "ℹ️  $*"; }
 log_success() { echo "✅ $*"; }
+log_warning() { echo "⚠️  $*"; }
 log_error() { echo "❌ $*" >&2; }
+
+sanitize_image_name() {
+  local image="$1"
+  echo -n "$image" | md5sum | cut -c1-12
+}
 
 extract_images() {
   helm template trento charts/trento-server/ \
@@ -59,7 +65,12 @@ generate_comment() {
     return 1
   fi
 
-  local images_json=$(jq -r '.images[]?' "$OUTPUT_IMAGES_FILE" 2>/dev/null)
+  if ! jq empty "$OUTPUT_IMAGES_FILE" 2>/dev/null; then
+    log_error "Invalid JSON in $OUTPUT_IMAGES_FILE"
+    return 1
+  fi
+
+  local images_json=$(jq -r '.images[]?' "$OUTPUT_IMAGES_FILE")
   if [ -z "$images_json" ]; then
     log_warning "No images found in $OUTPUT_IMAGES_FILE"
     return 1
@@ -77,11 +88,41 @@ generate_comment() {
   while IFS= read -r image; do
     [ -z "$image" ] && continue
 
-    log_info "Scanning: $image"
+    log_info "Processing: $image"
 
-    # Run trivy scan on the image
+    local safe_name
+    safe_name=$(sanitize_image_name "$image")
+
+    local scan_file
+    scan_file="scan-results/trivy-scan-${safe_name}/${safe_name}-trivy-results.json"
+
+    if [ ! -f "$scan_file" ]; then
+      log_error "Scan file not found: $scan_file (expected for $image)"
+      {
+        echo ""
+        echo "### ❌ \`${image}\`"
+        echo ""
+        echo "**Scan failed** — no results available."
+      } >> "$OUTPUT_COMMENT_FILE"
+      continue
+    fi
+
     local scan_output
-    scan_output=$(trivy image "$image" --format json --severity CRITICAL,HIGH,MEDIUM 2>/dev/null || echo "{}")
+    if ! scan_output=$(cat "$scan_file"); then
+      log_error "Failed to read scan file: $scan_file"
+      continue
+    fi
+
+    if ! jq empty <<< "$scan_output" 2>/dev/null; then
+      log_error "Invalid JSON in scan file: $scan_file"
+      {
+        echo ""
+        echo "### ❌ \`${image}\`"
+        echo ""
+        echo "**Scan results corrupted** — invalid JSON."
+      } >> "$OUTPUT_COMMENT_FILE"
+      continue
+    fi
 
     local cve_count
     cve_count=$(echo "$scan_output" | jq '[.Results[]?.Vulnerabilities[]?] | length' 2>/dev/null || echo "0")
@@ -130,12 +171,19 @@ detect_mode() {
   pr_images=$(mktemp) || return 1
   main_images=$(mktemp) || return 1
 
-  # Add Helm chart repositories from Chart.yaml
+  log_info "Setting up Helm repositories"
   grep "repository: http" charts/trento-server/Chart.yaml | sed 's/.*repository: //' | sort -u | while read -r repo_url; do
-    helm repo add "repo-$(echo "$repo_url" | md5sum | cut -c1-8)" "$repo_url" 2>/dev/null || true
+    if ! helm repo add "repo-$(echo "$repo_url" | md5sum | cut -c1-8)" "$repo_url" 2>/dev/null; then
+      log_error "Failed to add Helm repo: $repo_url"
+      exit 1
+    fi
   done
 
-  helm dependency build charts/trento-server/ --skip-refresh 2>/dev/null || true
+  if ! helm dependency build charts/trento-server/ --skip-refresh; then
+    log_error "Failed to build Helm dependencies"
+    rm -f "$pr_images" "$main_images" 2>/dev/null || true
+    return 1
+  fi
 
   log_info "Extracting images from PR branch"
   extract_images > "$pr_images"
@@ -143,22 +191,54 @@ detect_mode() {
   # Get images from main branch for comparison
   log_info "Extracting images from main branch"
 
-  # Stash PR changes, checkout main, extract images, restore
-  git stash 2>/dev/null || true
-  git checkout origin/main 2>/dev/null || {
+  # Check if there are uncommitted changes to stash
+  local has_changes=0
+  if ! git diff --quiet; then
+    has_changes=1
+    if ! git stash push -m "pr-scan-tmp"; then
+      log_error "Failed to stash changes"
+      rm -f "$pr_images" "$main_images" 2>/dev/null || true
+      return 1
+    fi
+  fi
+
+  if ! git checkout origin/main; then
     log_error "Failed to checkout main branch"
-    git stash pop 2>/dev/null || true
+    if [ $has_changes -eq 1 ]; then
+      git stash pop 2>/dev/null || log_warning "Failed to restore stashed changes"
+    fi
     rm -f "$pr_images" "$main_images" 2>/dev/null || true
     return 1
-  }
+  fi
 
-  helm template trento charts/trento-server/ \
-    --set prometheus.server.auth.type=none \
-    2>/dev/null | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u > "$main_images"
+  if ! helm template trento charts/trento-server/ \
+    --set prometheus.server.auth.type=none 2>/dev/null \
+    | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u > "$main_images"; then
+    log_error "Failed to extract images from main branch"
+    git checkout - || log_warning "Failed to return to PR branch"
+    if [ $has_changes -eq 1 ]; then
+      git stash pop 2>/dev/null || log_warning "Failed to restore stashed changes"
+    fi
+    rm -f "$pr_images" "$main_images" 2>/dev/null || true
+    return 1
+  fi
 
-  # Restore PR branch
-  git checkout - 2>/dev/null || true
-  git stash pop 2>/dev/null || true
+  if ! git checkout -; then
+    log_error "Failed to return to PR branch"
+    if [ $has_changes -eq 1 ]; then
+      git stash pop 2>/dev/null || log_warning "Failed to restore stashed changes"
+    fi
+    rm -f "$pr_images" "$main_images" 2>/dev/null || true
+    return 1
+  fi
+
+  if [ $has_changes -eq 1 ]; then
+    if ! git stash pop; then
+      log_error "Failed to restore stashed changes"
+      rm -f "$pr_images" "$main_images" 2>/dev/null || true
+      return 1
+    fi
+  fi
 
   local has_changes
   detect_changed_images "$pr_images" "$main_images"
@@ -168,6 +248,8 @@ detect_mode() {
   images=$(jq -c '.images' "$OUTPUT_IMAGES_FILE")
   echo "has_changes=$([ $has_changes -eq 0 ] && echo 'true' || echo 'false')" >> "$GITHUB_OUTPUT"
   echo "images=$images" >> "$GITHUB_OUTPUT"
+
+  rm -f "$pr_images" "$main_images" 2>/dev/null || true
 
   log_success "PR image detection completed"
 }
@@ -198,17 +280,18 @@ post_mode() {
     --jq '.comments[] | select(.author.isBot and .body | contains("CVE Scan Results")) | .id' 2>/dev/null | head -1 || echo "")
 
   if [ -n "$COMMENT_ID" ]; then
-    if gh pr comment "$PR_NUMBER" --edit "$COMMENT_ID" --body-file comment.md 2>/dev/null; then
+    if gh pr comment "$PR_NUMBER" --edit "$COMMENT_ID" --body-file comment.md; then
       log_success "Updated existing comment"
     else
-      log_info "Updating failed, creating new comment"
-      gh pr comment "$PR_NUMBER" --body-file comment.md 2>/dev/null || log_error "Failed to post comment"
+      log_error "Failed to update existing comment"
+      return 1
     fi
   else
-    if gh pr comment "$PR_NUMBER" --body-file comment.md 2>/dev/null; then
+    if gh pr comment "$PR_NUMBER" --body-file comment.md; then
       log_success "Created new comment"
     else
       log_error "Failed to post comment"
+      return 1
     fi
   fi
 }
