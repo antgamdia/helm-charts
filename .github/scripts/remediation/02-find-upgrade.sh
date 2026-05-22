@@ -40,10 +40,9 @@ fi
 # Store raw tag count
 TAG_COUNT=$(echo "$ALL_TAGS" | wc -l)
 
-# Optimization: only process first 500 tags (since sorted newest-first)
-# Use awk instead of head to avoid SIGPIPE when skopeo outputs many tags
-TAGS_TO_CHECK=$(echo "$ALL_TAGS" | awk 'NR<=500')
-mapfile -t TAG_ARRAY <<< "$TAGS_TO_CHECK"
+# Process all valid semantic version tags (already filtered by list_image_tags)
+# These are already filtered to only version-like tags, so no arbitrary limit needed
+mapfile -t TAG_ARRAY <<< "$ALL_TAGS"
 
 CHECKED_COUNT=${#TAG_ARRAY[@]}
 
@@ -52,8 +51,8 @@ if [ "$CHECKED_COUNT" -eq 0 ]; then
   exit 1
 fi
 
-log_info "Found $TAG_COUNT total tags"
-log_info "Checking first $CHECKED_COUNT tags (optimization for large registries)"
+log_info "Found $TAG_COUNT total valid version tags"
+log_info "Checking first $CHECKED_COUNT tags"
 
 # === FIND COMPATIBLE VERSIONS ===
 # Parse current tag to get suffix (e.g., "-alpine", "-management")

@@ -41,14 +41,25 @@ log_info "Updating chart files: $CURRENT_TAG → $TARGET_TAG"
 # === FIND AND UPDATE CHART FILES ===
 UPDATED_FILES=()
 
-# Find all .yaml files in charts directory (values.yaml and templates)
+# Find all .yaml files in charts directory
 while IFS= read -r -d '' chart_file; do
   log_info "Checking: $chart_file"
 
-  # Check if file references the image (in any format: full or split)
-  if ! grep -qE "$BASE_IMAGE|$REPO_ONLY|$CURRENT_TAG" "$chart_file"; then
-    log_info "  → Image not referenced, skipping"
-    continue
+  # For template files: only update if they have HARDCODED full image reference
+  # (skips files that only reference the image indirectly via {{ .Values }})
+  # For values.yaml: update if file references the image
+  if [[ "$chart_file" == *"/templates/"* ]]; then
+    # Template file: only process if it contains the FULL hardcoded image reference
+    if ! grep -q "image:.*$CURRENT_IMAGE_REF\|image: $CURRENT_IMAGE_REF" "$chart_file"; then
+      log_info "  → Templated (updates via values.yaml), skipping"
+      continue
+    fi
+  else
+    # Not a template file: check if it has something to update
+    if ! grep -qE "$CURRENT_IMAGE_REF|repository:.*$REPO_ONLY" "$chart_file"; then
+      log_info "  → Image not referenced, skipping"
+      continue
+    fi
   fi
 
   log_info "  → Updating image"
