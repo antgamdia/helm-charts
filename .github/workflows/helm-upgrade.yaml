@@ -59,6 +59,26 @@ jobs:
             source: oss-release
           - name: "OSS rolling → current"
             source: oss-main
+          - name: "OSS rolling → current with full stack"
+            source: oss-main
+            extra_flags: |
+              --set postgresql.postgresqlDatabase=trento
+              --set postgresql.volumePermissions.enabled=true
+              --set postgresql.metrics.enabled=true
+              --set postgresql.replication.enabled=true
+              --set postgresql.shmVolume.enabled=true
+              --set postgresql.shmVolume.chmod.enabled=true
+              --set prometheus.enabled=true
+              --set prometheus.server.enabled=true
+              --set prometheus.alertmanager.enabled=true
+              --set prometheus.prometheus-pushgateway.enabled=true
+              --set prometheus.configmapReload.prometheus.enabled=true
+              --set prometheus.kube-state-metrics.enabled=true
+              --set prometheus.prometheus-node-exporter.enabled=true
+              --set rabbitmq.volumePermissions.enabled=true
+              --set rabbitmq.metrics.enabled=true
+              --set global.rabbitmq.tls.mtls.enabled=true
+              --set global.rabbitmq.tls.mtls.certManager.enabled=true
       fail-fast: false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -157,7 +177,8 @@ jobs:
             --create-namespace \
             --timeout 3m \
             --render-subchart-notes \
-            ${HELM_COMMON_FLAGS}
+            ${HELM_COMMON_FLAGS} \
+            ${{ matrix.extra_flags }}
 
       - name: Check pod status after install
         if: always()
@@ -180,6 +201,7 @@ jobs:
             --render-subchart-notes \
             --debug \
             ${HELM_COMMON_FLAGS} \
+            ${{ matrix.extra_flags }} \
             --set trento-web.image.tag=rolling \
             --set trento-wanda.image.tag=rolling \
             --set trento-wanda.checks.image.tag=rolling \
