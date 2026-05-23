@@ -108,10 +108,16 @@ generate_comment() {
 
   local total_cves=0
 
-  # Get images metadata from changed_images.json if it exists
-  local images_metadata="[]"
-  if [ -f "$OUTPUT_IMAGES_FILE" ]; then
-    images_metadata=$(jq -c '.images_metadata' "$OUTPUT_IMAGES_FILE" 2>/dev/null || echo "[]")
+  # Get images metadata from changed_images.json (created by detect mode)
+  if [ ! -f "$OUTPUT_IMAGES_FILE" ]; then
+    log_error "No image metadata found: $OUTPUT_IMAGES_FILE"
+    return 1
+  fi
+
+  local images_metadata=$(jq -c '.images_metadata' "$OUTPUT_IMAGES_FILE" 2>/dev/null)
+  if [ -z "$images_metadata" ] || [ "$images_metadata" = "null" ]; then
+    log_error "Invalid image metadata in $OUTPUT_IMAGES_FILE"
+    return 1
   fi
 
   # Process each image from metadata
