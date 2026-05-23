@@ -11,9 +11,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=common.sh
-source "$SCRIPT_DIR/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 ANALYSIS_FILE="$1"
 UPGRADE_FILE="$2"
@@ -21,7 +20,7 @@ VALUES_FILE="$3"
 OUTPUT_FILE="$4"
 
 # === VALIDATE PREREQUISITES ===
-if [ -z "${GH_TOKEN:-}" ]; then
+if [ -z "$GH_TOKEN" ]; then
   log_error "GH_TOKEN environment variable not set (required for PR creation)"
   exit 1
 fi
@@ -203,9 +202,8 @@ FILE_LIST=$(echo "$UPDATED_FILES" | sed 's|.*|- `&`|' | grep -v '^-[[:space:]]*$
 PR_BODY+="$FILE_LIST"
 
 # Query GitHub Code Scanning alerts for this image
-GITHUB_REPO="${GITHUB_REPOSITORY:-}"
-if [ -n "$GITHUB_REPO" ]; then
-  MATCHING_ALERTS=$(gh api "repos/$GITHUB_REPO/code-scanning/alerts?tool_name=Trivy&state=open&per_page=100" \
+if [ -n "$GITHUB_REPOSITORY" ]; then
+  MATCHING_ALERTS=$(gh api "repos/$GITHUB_REPOSITORY/code-scanning/alerts?tool_name=Trivy&state=open&per_page=100" \
     --jq '.[] | select(.rule.id | startswith("CVE")) | {number, html_url, rule_id: .rule.id}' \
     2>/dev/null || echo "")
 
@@ -218,7 +216,7 @@ if [ -n "$GITHUB_REPO" ]; then
 This PR addresses the following Code Scanning alerts:
 
 "
-    PR_BODY+=$(echo "$MATCHING_ALERTS" | jq -r '"- [\(.rule_id)](https://nvd.nist.gov/vuln/detail/\(.rule_id)) - [Alert #\(.number)](\(.html_url))"')
+    PR_BODY+=$(echo "$MATCHING_ALERTS" | jq -r '"- [\(.rule_id)]('"$NIST_CVE_URL"'/\(.rule_id)) - [Alert #\(.number)](\(.html_url))"')
   fi
 elif [ "$CVE_COUNT" -gt 0 ]; then
   # Fallback to CVE list if no alerts found
@@ -229,7 +227,7 @@ elif [ "$CVE_COUNT" -gt 0 ]; then
 This update addresses the following CVEs:
 
 "
-  CVE_LIST=$(jq -r '.cves[]?' "$ANALYSIS_FILE" | head -10 | sed 's|.*|- [`&`](https://nvd.nist.gov/vuln/detail/&)|')
+  CVE_LIST=$(jq -r '.cves[]?' "$ANALYSIS_FILE" | head -10 | sed "s|.*|- [\`&\`]($NIST_CVE_URL/&)|")
   PR_BODY+="$CVE_LIST"
 
   if [ "$CVE_COUNT" -gt 10 ]; then
@@ -241,7 +239,7 @@ fi
 # Create PR
 log_info "Creating PR: $PR_TITLE"
 
-PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --label "dependencies" 2>/dev/null) || {
+PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY" --label "$CVE_PR_LABEL" 2>/dev/null) || {
   # Labels may not exist - try without them
   log_warning "Labels not found, creating PR without labels"
   PR_URL=$(gh pr create --title "$PR_TITLE" --body "$PR_BODY") || {

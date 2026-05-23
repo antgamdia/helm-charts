@@ -2,31 +2,18 @@
 # Detect changed images in PR and generate CVE comment
 set -euo pipefail
 
-MODE="${1:-detect}"
+# Source shared helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
+
+MODE="$1"
 OUTPUT_IMAGES_FILE="changed_images.json"
 OUTPUT_COMMENT_FILE="comment.md"
-
-log_info() { echo "ℹ️  $*"; }
-log_success() { echo "✅ $*"; }
-log_warning() { echo "⚠️  $*"; }
-log_error() { echo "❌ $*" >&2; }
-log_debug() { [ "${DEBUG:-0}" = "1" ] && echo "🔍 $*" || true; }
-
-sanitize_image_name() {
-  local image="$1"
-  echo -n "$image" | md5sum | cut -c1-12
-}
 
 find_scan_file_for_image() {
   local image="$1"
   local safe_name=$(sanitize_image_name "$image")
   find scan-results -path "*trivy-scan-${safe_name}/*-trivy-results.json" -type f | head -1
-}
-
-extract_images() {
-  helm template trento charts/trento-server/ \
-    --set prometheus.server.auth.type=none \
-    | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u
 }
 
 detect_changed_images() {
@@ -168,7 +155,7 @@ generate_comment() {
             echo "|--------|---------|-----------|-------|"
           } >> "$OUTPUT_COMMENT_FILE"
 
-          jq -r ".Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\") | \"| [\(.VulnerabilityID)](https://nvd.nist.gov/vuln/detail/\(.VulnerabilityID)) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // \"N/A\") |\"" "$scan_file" >> "$OUTPUT_COMMENT_FILE"
+          jq -r ".Results[]?.Vulnerabilities[]? | select(.Severity == \"$severity\") | \"| [\(.VulnerabilityID)]($NIST_CVE_URL/\(.VulnerabilityID)) | \(.PkgName) | \(.InstalledVersion) | \(.FixedVersion // \"N/A\") |\"" "$scan_file" >> "$OUTPUT_COMMENT_FILE"
 
           {
             echo ""
@@ -228,58 +215,25 @@ detect_mode() {
   pr_images=$(mktemp) || return 1
   main_images=$(mktemp) || return 1
 
-  log_info "Setting up Helm repositories"
-  grep "repository: http" charts/trento-server/Chart.yaml | sed 's/.*repository: //' | sort -u | while read -r repo_url; do
-    if ! helm repo add "repo-$(echo "$repo_url" | md5sum | cut -c1-8)" "$repo_url" 2>/dev/null; then
-      log_error "Failed to add Helm repo: $repo_url"
-      exit 1
-    fi
-  done
-
-  if ! helm dependency build charts/trento-server/ --skip-refresh; then
-    log_error "Failed to build Helm dependencies"
-    rm -f "$pr_images" "$main_images" 2>/dev/null || true
-    return 1
-  fi
+  trap_cleanup "$pr_images" "$main_images"
 
   log_info "Extracting images from PR branch"
-  extract_images > "$pr_images"
+  setup_helm_repos "$DEFAULT_CHART_PATH" || return 1
+  build_helm_deps "$DEFAULT_CHART_PATH" || return 1
+  extract_images_from_chart "$DEFAULT_CHART_PATH" > "$pr_images" || return 1
   echo "PR images:"
   cat "$pr_images" | sed 's/^/  /'
   echo ""
 
-  # Get images from main branch for comparison
   log_info "Extracting images from main branch"
 
-  # Check if there are uncommitted changes to stash
-  local has_changes=0
-  if ! git diff --quiet; then
-    has_changes=1
-    if ! git stash push -m "pr-scan-tmp"; then
-      log_error "Failed to stash changes"
-      rm -f "$pr_images" "$main_images" 2>/dev/null || true
-      return 1
-    fi
-  fi
+  local has_changes
+  has_changes=$(safe_git_checkout "origin/main") || return 1
 
-  if ! git checkout origin/main; then
-    log_error "Failed to checkout main branch"
-    if [ $has_changes -eq 1 ]; then
-      git stash pop 2>/dev/null || log_warning "Failed to restore stashed changes"
-    fi
-    rm -f "$pr_images" "$main_images" 2>/dev/null || true
-    return 1
-  fi
-
-  if ! helm template trento charts/trento-server/ \
-    --set prometheus.server.auth.type=none 2>/dev/null \
-    | grep -E "^\s+image:" | awk '{gsub(/"/, "", $2); print $2}' | sort -u > "$main_images"; then
+  if ! extract_images_from_chart "$DEFAULT_CHART_PATH" > "$main_images"; then
     log_error "Failed to extract images from main branch"
-    git checkout - || log_warning "Failed to return to PR branch"
-    if [ $has_changes -eq 1 ]; then
-      git stash pop 2>/dev/null || log_warning "Failed to restore stashed changes"
-    fi
-    rm -f "$pr_images" "$main_images" 2>/dev/null || true
+    git checkout - >/dev/null 2>&1 || log_warning "Failed to return to PR branch"
+    restore_from_stash "$has_changes" || true
     return 1
   fi
 
@@ -287,26 +241,17 @@ detect_mode() {
   cat "$main_images" | sed 's/^/  /'
   echo ""
 
-  if ! git checkout -; then
+  if ! git checkout - >/dev/null 2>&1; then
     log_error "Failed to return to PR branch"
-    if [ $has_changes -eq 1 ]; then
-      git stash pop 2>/dev/null || log_warning "Failed to restore stashed changes"
-    fi
-    rm -f "$pr_images" "$main_images" 2>/dev/null || true
+    restore_from_stash "$has_changes" || true
     return 1
   fi
 
-  if [ $has_changes -eq 1 ]; then
-    if ! git stash pop; then
-      log_error "Failed to restore stashed changes"
-      rm -f "$pr_images" "$main_images" 2>/dev/null || true
-      return 1
-    fi
+  if ! restore_from_stash "$has_changes"; then
+    return 1
   fi
 
   detect_changed_images "$pr_images" "$main_images"
-
-  rm -f "$pr_images" "$main_images" 2>/dev/null || true
 
   log_success "PR image detection completed"
 }
@@ -325,7 +270,6 @@ post_mode() {
     exit 0
   fi
 
-  PR_NUMBER="${PR_NUMBER:-}"
   if [ -z "$PR_NUMBER" ]; then
     log_error "PR_NUMBER not set"
     exit 1

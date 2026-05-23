@@ -2,13 +2,14 @@
 # Generate SBOM and ImagesLock reports from scan artifacts
 set -euo pipefail
 
-COMMAND="${1:-all}"
-REPORTS_DIR="${2:-reports}"
-CHARTS_DIR="${3:-charts}"
+# Source shared helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
-log_info() { echo "ℹ️  $*"; }
-log_success() { echo "✅ $*"; }
-log_error() { echo "❌ $*" >&2; }
+COMMAND="$1"
+REPORTS_DIR="$2"
+CHART_NAME="$3"
+CHART_VERSION="$4"
 
 # Merge individual SBOM files into consolidated CycloneDX format
 merge_sboms() {
@@ -39,13 +40,11 @@ merge_sboms() {
 # Generate ImagesLock YAML file
 generate_images_lock() {
   local sbom_dir="$1"
-  local charts_dir="$2"
-  local output_file="$3"
+  local chart_name="$2"
+  local chart_version="$3"
+  local output_file="$4"
 
   log_info "Generating ImagesLock file"
-
-  local chart_name=$(yq '.name' "${charts_dir}/trento-server/Chart.yaml")
-  local chart_version=$(yq '.version' "${charts_dir}/trento-server/Chart.yaml")
 
   cat > "$output_file" << EOF
 apiVersion: v0
@@ -85,16 +84,16 @@ main() {
       ;;
     imageslock)
       log_info "Generating ImagesLock report"
-      generate_images_lock "$REPORTS_DIR" "$CHARTS_DIR" "${REPORTS_DIR}/images-lock.yaml"
+      generate_images_lock "$REPORTS_DIR" "$CHART_NAME" "$CHART_VERSION" "${REPORTS_DIR}/images-lock.yaml"
       ;;
     all)
       log_info "Generating all reports"
       merge_sboms "$REPORTS_DIR" "${REPORTS_DIR}/sbom.cyclonedx.json"
-      generate_images_lock "$REPORTS_DIR" "$CHARTS_DIR" "${REPORTS_DIR}/images-lock.yaml"
+      generate_images_lock "$REPORTS_DIR" "$CHART_NAME" "$CHART_VERSION" "${REPORTS_DIR}/images-lock.yaml"
       ;;
     *)
       log_error "Unknown command: $COMMAND"
-      log_error "Usage: $0 {sbom|imageslock|all} [reports_dir] [charts_dir]"
+      log_error "Usage: $0 {sbom|imageslock|all} [reports_dir] [chart_name] [chart_version]"
       exit 1
       ;;
   esac

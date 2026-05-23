@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 ANALYSIS_FILE="$1"
 UPGRADE_FILE="$2"
@@ -24,10 +24,7 @@ BASE_IMAGE=$(jq -r '.base_image' "$ANALYSIS_FILE")
 CURRENT_TAG=$(jq -r '.current_tag' "$ANALYSIS_FILE")
 TARGET_TAG=$(jq -r '.target_tag' "$UPGRADE_FILE")
 
-if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "null" ]; then
-  log_error "No target tag in upgrade plan"
-  exit 1
-fi
+validate_target_tag "$TARGET_TAG" || exit 1
 
 # Build full image references for search/replace
 CURRENT_IMAGE_REF="$BASE_IMAGE:$CURRENT_TAG"
@@ -123,9 +120,7 @@ if [ $UPDATE_COUNT -gt 0 ]; then
   log_success "Updated $UPDATE_COUNT values files"
 
   # Set output for workflow
-  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-    echo "files_updated=$UPDATE_COUNT" >> "$GITHUB_OUTPUT"
-  fi
+  github_output "files_updated" "$UPDATE_COUNT"
 
   exit 0
 else
@@ -140,9 +135,7 @@ else
   output_json "$OUTPUT_FILE" "$OUTPUT_JSON" || exit 1
 
   # Set output for workflow
-  if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-    echo "files_updated=0" >> "$GITHUB_OUTPUT"
-  fi
+  github_output "files_updated" "0"
 
   exit 0
 fi
