@@ -45,7 +45,7 @@ setup_helm_repos() {
     | sort -u \
     | while read -r repo_url; do
       local repo_name="repo-$(echo "$repo_url" | md5sum | cut -c1-8)"
-      if ! helm repo add "$repo_name" "$repo_url" 2>/dev/null; then
+      if ! helm repo add "$repo_name" "$repo_url" >/dev/null 2>&1; then
         log_warning "Failed to add Helm repo: $repo_url"
       fi
     done
@@ -58,7 +58,7 @@ build_helm_deps() {
   local chart_path="$1"
 
   log_info "Building Helm dependencies for $chart_path"
-  if ! helm dependency build "$chart_path" --skip-refresh 2>&1 | grep -v "^WARNING"; then
+  if ! helm dependency build "$chart_path" --skip-refresh 2>&1 | grep -v "^WARNING" > /dev/null; then
     log_error "Failed to build Helm dependencies"
     return 1
   fi
