@@ -5,7 +5,31 @@ set -euo pipefail
 # === CONSTANTS ===
 # shellcheck disable=SC2034
 readonly DEFAULT_CHART_PATH="charts/trento-server"
-readonly HELM_TEMPLATE_FLAGS="--set prometheus.server.auth.type=none"
+readonly HELM_TEMPLATE_FLAGS=(
+  "--set trento-web.enabled=true"
+  "--set trento-wanda.enabled=true"
+  "--set trento-mcp-server.enabled=true"
+  "--set postgresql.enabled=true"
+  "--set postgresql.postgresqlDatabase=trento"
+  "--set postgresql.volumePermissions.enabled=true"
+  "--set postgresql.metrics.enabled=true"
+  "--set postgresql.replication.enabled=true"
+  "--set postgresql.shmVolume.enabled=true"
+  "--set postgresql.shmVolume.chmod.enabled=true"
+  "--set prometheus.enabled=true"
+  "--set prometheus.server.enabled=true"
+  "--set prometheus.server.auth.type=none"
+  "--set prometheus.alertmanager.enabled=true"
+  "--set prometheus.prometheus-pushgateway.enabled=true"
+  "--set prometheus.configmapReload.prometheus.enabled=true"
+  "--set prometheus.kube-state-metrics.enabled=true"
+  "--set prometheus.prometheus-node-exporter.enabled=true"
+  "--set rabbitmq.enabled=true"
+  "--set rabbitmq.volumePermissions.enabled=true"
+  "--set rabbitmq.metrics.enabled=true"
+  "--set global.rabbitmq.tls.mtls.enabled=true"
+  "--set global.rabbitmq.tls.mtls.certManager.enabled=true"
+)
 # shellcheck disable=SC2034
 readonly CVE_PR_LABEL="dependencies"
 # shellcheck disable=SC2034
@@ -76,8 +100,7 @@ build_helm_deps() {
 extract_images_from_chart() {
   local chart_path="$1"
 
-  # shellcheck disable=SC2086
-  helm template trento "$chart_path" $HELM_TEMPLATE_FLAGS 2>/dev/null \
+  helm template trento "$chart_path" "${HELM_TEMPLATE_FLAGS[@]}" 2>/dev/null \
     | grep -E "^\s+image:" \
     | awk '{gsub(/"/, "", $2); print $2}' \
     | sort -u
