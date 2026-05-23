@@ -3,9 +3,12 @@
 set -euo pipefail
 
 # === CONSTANTS ===
+# shellcheck disable=SC2034
 readonly DEFAULT_CHART_PATH="charts/trento-server"
 readonly HELM_TEMPLATE_FLAGS="--set prometheus.server.auth.type=none"
+# shellcheck disable=SC2034
 readonly CVE_PR_LABEL="dependencies"
+# shellcheck disable=SC2034
 readonly NIST_CVE_URL="https://nvd.nist.gov/vuln/detail"
 
 # === LOGGING FUNCTIONS ===
@@ -44,6 +47,7 @@ setup_helm_repos() {
     | sed 's/.*repository: //' \
     | sort -u \
     | while read -r repo_url; do
+      # shellcheck disable=SC2155
       local repo_name="repo-$(echo "$repo_url" | md5sum | cut -c1-8)"
       if ! helm repo add "$repo_name" "$repo_url" >/dev/null 2>&1; then
         log_warning "Failed to add Helm repo: $repo_url"
@@ -72,6 +76,7 @@ build_helm_deps() {
 extract_images_from_chart() {
   local chart_path="$1"
 
+  # shellcheck disable=SC2086
   helm template trento "$chart_path" $HELM_TEMPLATE_FLAGS 2>/dev/null \
     | grep -E "^\s+image:" \
     | awk '{gsub(/"/, "", $2); print $2}' \
@@ -165,7 +170,7 @@ parse_version() {
   # Extract version (major.minor.patch or major.minor or major)
   if [[ "$tag" =~ ^([0-9]+(\.[0-9]+)?(\.[0-9]+)?(\.[0-9]+)?) ]]; then
     local version="${BASH_REMATCH[1]}"
-    local suffix="${tag#$version}"
+    local suffix="${tag#"$version"}"
     echo "$version|$suffix"
   else
     echo "|$tag"
