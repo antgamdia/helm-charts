@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 INPUT_FILE="$1"
 OUTPUT_FILE="$2"
@@ -159,13 +159,11 @@ fi
 log_info "Output: $OUTPUT_FILE"
 
 # Set output variables for workflow
-if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-  echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-  if [ "$SKIP" = "true" ]; then
-    echo "skip_reason=already-latest" >> "$GITHUB_OUTPUT"
-  else
-    echo "target_version=$TARGET_TAG" >> "$GITHUB_OUTPUT"
-  fi
+github_output "skip" "$SKIP"
+if [ "$SKIP" = "true" ]; then
+  github_output "skip_reason" "already-latest"
+else
+  github_output "target_version" "$TARGET_TAG"
 fi
 
 exit 0

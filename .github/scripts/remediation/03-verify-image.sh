@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 ANALYSIS_FILE="$1"
 UPGRADE_FILE="$2"
@@ -20,10 +20,7 @@ OUTPUT_FILE="$3"
 BASE_IMAGE=$(jq -r '.base_image' "$ANALYSIS_FILE")
 TARGET_TAG=$(jq -r '.target_tag' "$UPGRADE_FILE")
 
-if [ -z "$TARGET_TAG" ] || [ "$TARGET_TAG" = "null" ]; then
-  log_error "No target tag in upgrade plan"
-  exit 1
-fi
+validate_target_tag "$TARGET_TAG" || exit 1
 
 FULL_IMAGE_REF="$BASE_IMAGE:$TARGET_TAG"
 log_info "Verifying image: $FULL_IMAGE_REF"

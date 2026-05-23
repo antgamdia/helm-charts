@@ -11,8 +11,8 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/common.sh"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$SCRIPT_DIR/helpers.sh"
 
 # Extract SARIF results and CVE IDs
 extract_cves_from_sarif() {
@@ -109,11 +109,9 @@ log_success "SARIF analysis complete"
 log_info "Found $(echo "$OUTPUT_JSON" | jq '.cves | length') CVEs"
 
 # Set output variables for workflow
-if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
-  echo "skip=$SKIP" >> "$GITHUB_OUTPUT"
-  if [ "$SKIP" = "true" ]; then
-    echo "skip_reason=non-semantic-version" >> "$GITHUB_OUTPUT"
-  fi
+github_output "skip" "$SKIP"
+if [ "$SKIP" = "true" ]; then
+  github_output "skip_reason" "non-semantic-version"
 fi
 
 exit 0
