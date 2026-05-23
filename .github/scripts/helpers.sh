@@ -13,7 +13,6 @@ log_info() { echo "ℹ️  $*" >&2; }
 log_success() { echo "✅ $*" >&2; }
 log_error() { echo "❌ $*" >&2; }
 log_warning() { echo "⚠️  $*" >&2; }
-log_debug() { [ "${DEBUG}" = "1" ] && echo "🔍 $*" >&2 || true; }
 
 # === IMAGE SANITIZATION ===
 # Sanitize image name for use in filenames and IDs
@@ -37,7 +36,7 @@ setup_helm_repos() {
   log_info "Setting up Helm repositories"
 
   if ! grep -q "repository: http" "$chart_path/Chart.yaml" 2>/dev/null; then
-    log_debug "No external Helm repositories found"
+    log_info "No external Helm repositories found"
     return 0
   fi
 
@@ -73,7 +72,7 @@ build_helm_deps() {
 extract_images_from_chart() {
   local chart_path="$1"
 
-  helm template trento "$chart_path" "$HELM_TEMPLATE_FLAGS" 2>/dev/null \
+  helm template trento "$chart_path" $HELM_TEMPLATE_FLAGS 2>/dev/null \
     | grep -E "^\s+image:" \
     | awk '{gsub(/"/, "", $2); print $2}' \
     | sort -u
