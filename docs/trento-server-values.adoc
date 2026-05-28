@@ -1,0 +1,139 @@
+= Trento Server values reference
+
+This page documents every configurable value in `charts/trento-server/values.yaml`.
+
+== Dependencies and interactions
+
+* `trento-web.enabled`, `trento-wanda.enabled`, `trento-mcp-server.enabled`, `postgresql.enabled`, `prometheus.enabled`, and `rabbitmq.enabled` control whether each subchart is deployed.
+* `global.rabbitmq.tls.mtls.enabled=true` switches RabbitMQ and clients to mTLS mode.
+* `global.rabbitmq.tls.mtls.certManager.*` values are used only when mTLS is enabled and cert-manager resources are managed by the chart.
+* `prometheus.server.auth.type` must be set to `none` or `basic`; `prometheus.server.auth.basic.*` is used only in `basic` mode.
+* `prometheus.server.ingress.*` applies only when `prometheus.server.ingress.enabled=true`.
+
+== Global values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `global.clusterDomain` | string | `cluster.local` | Kubernetes cluster DNS domain. | Always evaluated.
+| `global.logLevel` | string | `info` | Configures this chart parameter. | Always evaluated.
+| `global.trentoWeb.name` | string | `web` | Configures this chart parameter. | Always evaluated.
+| `global.trentoWeb.servicePort` | integer | `4000` | Service port used by this component. | Always evaluated.
+| `global.trentoWeb.origin` | string | `""` | External origin/FQDN used for links and callbacks. | Always evaluated.
+| `global.trentoWanda.name` | string | `wanda` | Configures this chart parameter. | Always evaluated.
+| `global.trentoWanda.servicePort` | integer | `4000` | Service port used by this component. | Always evaluated.
+| `global.trentoMcpServer.name` | string | `mcp-server` | Configures this chart parameter. | Always evaluated.
+| `global.trentoMcpServer.servicePort` | integer | `5000` | Service port used by this component. | Always evaluated.
+| `global.postgresql.name` | string | `postgresql` | Configures this chart parameter. | Always evaluated.
+| `global.postgresql.servicePort` | integer | `5432` | Service port used by this component. | Always evaluated.
+| `global.postgresql.postgresqlUsername` | string | `postgres` | Username used by the component. | Always evaluated.
+| `global.postgresql.postgresqlPassword` | string | `postgres` | Credential value used by the component. | Always evaluated.
+| `global.postgresql.image.registry` | string | `registry.suse.com` | Configures this chart parameter. | Always evaluated.
+| `global.postgresql.image.repository` | string | `suse/postgres` | Container image repository. | Always evaluated.
+| `global.postgresql.image.tag` | string | `14` | Container image tag. | Always evaluated.
+| `global.prometheus.name` | string | `prometheus-server` | Configures this chart parameter. | Always evaluated.
+| `global.prometheus.pathPrefix` | string | `/prometheus` | HTTP path used by the exposed endpoint. | Always evaluated.
+| `global.rabbitmq.name` | string | `rabbitmq` | Configures this chart parameter. | Always evaluated.
+| `global.rabbitmq.servicePort` | integer | `5672` | Service port used by this component. | Always evaluated.
+| `global.rabbitmq.ports.amqp` | integer | `5672` | Configures this chart parameter. | Always evaluated.
+| `global.rabbitmq.ports.amqpTls` | integer | `5671` | Configures this chart parameter. | Always evaluated.
+| `global.rabbitmq.auth.username` | string | `trento` | Username used by the component. | Always evaluated.
+| `global.rabbitmq.auth.password` | string | `trento` | Credential value used by the component. | Always evaluated.
+| `global.rabbitmq.tls.mtls.enabled` | boolean | `false` | Enables this feature or component. | Always evaluated.
+| `global.rabbitmq.tls.mtls.certManager.enabled` | boolean | `true` | Enables this feature or component. | Used only when `global.rabbitmq.tls.mtls.enabled=true`.
+| `global.rabbitmq.tls.mtls.certManager.issuerName` | string | `rabbitmq-ca-issuer` | cert-manager issuer resource name used for mTLS certificates. | Used only when `global.rabbitmq.tls.mtls.enabled=true`.
+| `global.rabbitmq.tls.mtls.certManager.issuerKind` | string | `Issuer` | cert-manager issuer kind (`Issuer` or `ClusterIssuer`). | Used only when `global.rabbitmq.tls.mtls.enabled=true`.
+|===
+
+== trento-web subchart values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `trento-web.nameOverride` | string | `web` | Overrides the chart name for generated resource names. | Used only when `trento-web.enabled=true`.
+| `trento-web.enabled` | boolean | `true` | Enables this feature or component. | Used only when `trento-web.enabled=true`.
+| `trento-web.image.repository` | string | `ghcr.io/trento-project/trento-web` | Container image repository. | Used only when `trento-web.enabled=true`.
+|===
+
+== trento-wanda subchart values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `trento-wanda.nameOverride` | string | `wanda` | Overrides the chart name for generated resource names. | Used only when `trento-wanda.enabled=true`.
+| `trento-wanda.enabled` | boolean | `true` | Enables this feature or component. | Used only when `trento-wanda.enabled=true`.
+| `trento-wanda.image.repository` | string | `ghcr.io/trento-project/trento-wanda` | Container image repository. | Used only when `trento-wanda.enabled=true`.
+| `trento-wanda.checks.image.repository` | string | `ghcr.io/trento-project/checks` | Container image repository. | Used only when `trento-wanda.enabled=true`.
+|===
+
+== trento-mcp-server subchart values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `trento-mcp-server.nameOverride` | string | `mcp-server` | Overrides the chart name for generated resource names. | Used only when `trento-mcp-server.enabled=true`.
+| `trento-mcp-server.enabled` | boolean | `false` | Enables this feature or component. | Used only when `trento-mcp-server.enabled=true`.
+| `trento-mcp-server.image.repository` | string | `ghcr.io/trento-project/mcp-server-trento` | Container image repository. | Used only when `trento-mcp-server.enabled=true`.
+|===
+
+== postgresql subchart values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `postgresql.enabled` | boolean | `true` | Enables this feature or component. | Used only when `postgresql.enabled=true`.
+| `postgresql.persistence.mountPath` | string | `/var/lib/postgresql/data` | Filesystem path where the volume is mounted. | Used only when `postgresql.enabled=true`.
+| `postgresql.postgresqlDataDir` | string | `/var/lib/postgresql/data/trento` | PostgreSQL data directory inside the container. | Used only when `postgresql.enabled=true`.
+| `postgresql.securityContext.fsGroup` | integer | `0` | Pod filesystem group ID. | Used only when `postgresql.enabled=true`.
+| `postgresql.containerSecurityContext.runAsUser` | integer | `0` | Container runtime user ID. | Used only when `postgresql.enabled=true`.
+|===
+
+== prometheus subchart values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `prometheus.enabled` | boolean | `true` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.enabled` | boolean | `true` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.image.tag` | string | `v2.53.1` | Container image tag. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.configMapOverrideName` | string | `prometheus-configmap` | Prometheus server ConfigMap name to use. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.prefixURL` | string | `/prometheus` | Prometheus URL base/prefix path. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.baseURL` | string | `/prometheus` | Prometheus URL base/prefix path. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.extraFlags` | array | `<array>` | Additional startup flags passed to Prometheus. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.auth.type` | string | `""` | Prometheus auth mode (`none` or `basic`). | Used only when `prometheus.enabled=true`.
+| `prometheus.server.auth.basic.username` | string | `""` | Username used by the component. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.auth.type=basic`.
+| `prometheus.server.auth.basic.password` | string | `""` | Credential value used by the component. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.auth.type=basic`.
+| `prometheus.server.sidecarContainers.auth-proxy.image` | string | `registry.suse.com/suse/nginx:1.27` | Configures this chart parameter. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.sidecarContainers.auth-proxy.ports` | array | `[{"containerPort": 8081}]` | Configures this chart parameter. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.sidecarContainers.auth-proxy.volumeMounts` | array | `<array>` | Configures this chart parameter. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.extraVolumes` | array | `<array>` | Configures this chart parameter. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.service.additionalPorts` | array | `<array>` | Configures this chart parameter. | Used only when `prometheus.enabled=true`.
+| `prometheus.server.ingress.enabled` | boolean | `true` | Enables this feature or component. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.ingressClassName` | string | `""` | Configures this chart parameter. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.annotations` | object | `{}` | Additional Kubernetes annotations. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.hosts` | array | `[""]` | Ingress host entries. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.path` | string | `/prometheus` | HTTP path used by the exposed endpoint. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.pathType` | string | `Prefix` | Configures this chart parameter. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.tls` | array | `[]` | Ingress TLS configuration. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.server.ingress.servicePort` | integer | `8081` | Service port used by this component. | Used only when `prometheus.enabled=true`. Used only when `prometheus.server.ingress.enabled=true`.
+| `prometheus.alertmanager.enabled` | boolean | `false` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.prometheus-pushgateway.enabled` | boolean | `false` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.configmapReload.prometheus.enabled` | boolean | `false` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.kube-state-metrics.enabled` | boolean | `false` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.prometheus-node-exporter.enabled` | boolean | `false` | Enables this feature or component. | Used only when `prometheus.enabled=true`.
+| `prometheus.migrationHook.image.registry` | string | `registry.k8s.io` | Configures this chart parameter. | Used only when `prometheus.enabled=true`.
+| `prometheus.migrationHook.image.repository` | string | `kubectl` | Container image repository. | Used only when `prometheus.enabled=true`.
+| `prometheus.migrationHook.image.tag` | string | `v1.33.3` | Container image tag. | Used only when `prometheus.enabled=true`.
+|===
+
+== rabbitmq subchart values
+
+[cols="1,1,1,3,3",options="header"]
+|===
+| Parameter | Type | Default | Description | Dependencies
+| `rabbitmq.enabled` | boolean | `true` | Enables this feature or component. | Used only when `rabbitmq.enabled=true`.
+| `rabbitmq.persistence.enabled` | boolean | `true` | Enables this feature or component. | Used only when `rabbitmq.enabled=true`.
+| `rabbitmq.service.type` | string | `LoadBalancer` | Kubernetes Service type. | Used only when `rabbitmq.enabled=true`.
+| `rabbitmq.extraConfiguration` | string | `<multiline>` | Extra RabbitMQ configuration appended at runtime. | Used only when `rabbitmq.enabled=true`.
+|===
+

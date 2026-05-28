@@ -14,6 +14,19 @@ extensions to the Golang Tests. We can always use more test coverage.
 Please follow our coding conventions (below) and make sure all of your
 commits are atomic (one feature per commit).
 
+=== Helm chart documentation checklist
+
+When a change updates any `values.yaml` file, update the related
+documentation in the same pull request.
+
+Before opening a pull request, confirm all of the following:
+
+* Every added or changed Helm value is documented.
+* The documented default matches the value in `values.yaml`.
+* Conditional behavior is documented (for example, `*.enabled` toggles
+  and mTLS/cert-manager dependencies).
+* Related chart README files and `docs/*.adoc` pages are updated.
+
 Always write a clear log message for your commits. One-line messages are
 fine for small changes, but bigger changes should look like this:
 [source,bash]
