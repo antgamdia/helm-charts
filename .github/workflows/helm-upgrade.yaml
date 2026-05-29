@@ -88,6 +88,9 @@ jobs:
             bash -c '
               set -euo pipefail
 
+              # Fix git ownership for workspace
+              git config --global --add safe.directory /workspace
+
               # Configure OSC for anonymous access
               mkdir -p ~/.config/osc
               cat > ~/.config/osc/oscrc <<"OSCEOF"
@@ -95,10 +98,11 @@ jobs:
           apiurl = https://api.opensuse.org
 
           [https://api.opensuse.org]
-          # Anonymous access
+          user = anonymous
+          pass = anonymous
           OSCEOF
 
-              # Fetch OBS package
+              # Fetch OBS package (--unexpand to avoid source service processing)
               echo "=== Fetching OBS package ==="
               osc checkout "${OBS_PROJECT}" "${OBS_PACKAGE}"
               cd "${OBS_PROJECT}/${OBS_PACKAGE}"
