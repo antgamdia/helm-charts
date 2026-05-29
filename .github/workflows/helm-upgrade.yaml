@@ -68,98 +68,110 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Process OBS package artifacts
+      - name: Prepare OBS container with replace_using_env service
         if: matrix.source == 'obs-artifacts'
         env:
-          OBS_PROJECT: devel:sap:trento:factory
-          OBS_PACKAGE: trento-server-helm
           OBS_CONTAINER: ghcr.io/trento-project/continuous-delivery@sha256:24b2ea3d7a2c41fb005a024a90275b3a6ea37a213a690964f5aec459d61fb807 # v1.3.0
+          OBS_CONTAINER_NEW: continuous-delivery:dev
         run: |
-          mkdir -p obs-artifacts
+          # Install missing obs-service-replace_using_env and commit as new layer
+          # TODO: Add this package to the official continuous-delivery image
+          if docker image inspect "${OBS_CONTAINER_NEW}" > /dev/null 2>&1; then
+            echo "Using existing patched image: ${OBS_CONTAINER_NEW}"
+          else
+            echo "Installing obs-service-replace_using_env..."
+            docker run --user 0 "${OBS_CONTAINER}" \
+              zypper -n install --no-recommends obs-service-replace_using_env > /dev/null 2>&1
 
-          # Run OBS processing in the continuous-delivery container
-          # This container has osc, obs-service-replace_using_env, and all dependencies
-          docker run --rm \
-            -v "${{ github.workspace }}:/workspace" \
-            -w /workspace \
-            -e OBS_PROJECT="${OBS_PROJECT}" \
-            -e OBS_PACKAGE="${OBS_PACKAGE}" \
-            "${OBS_CONTAINER}" \
-            bash -c '
-              set -euo pipefail
+            CONTAINER_ID=$(docker ps -lq)
+            docker commit "${CONTAINER_ID}" "${OBS_CONTAINER_NEW}" > /dev/null
+            echo "Created patched image: ${OBS_CONTAINER_NEW}"
+          fi
 
-              # Fix git ownership for workspace
-              git config --global --add safe.directory /workspace
+      - name: Create OBS processing script
+        if: matrix.source == 'obs-artifacts'
+        run: |
+          cat > .obs-process.sh <<'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
 
-              # Configure OSC for anonymous access
-              mkdir -p ~/.config/osc
-              cat > ~/.config/osc/oscrc <<"OSCEOF"
-          [general]
-          apiurl = https://api.opensuse.org
+          # Fetch OBS package from git mirror
+          echo "Fetching OBS package from ${GIT_SOURCE_URL}..."
 
-          [https://api.opensuse.org]
-          user = anonymous
-          pass = anonymous
-          OSCEOF
+          WORK_DIR=$(mktemp -d)
+          cd "${WORK_DIR}"
 
-              # Fetch OBS package in a temp directory to avoid git permission issues
-              echo "=== Fetching OBS package ==="
-              WORK_DIR=$(mktemp -d)
-              cd "${WORK_DIR}"
-              osc checkout "${OBS_PROJECT}" "${OBS_PACKAGE}"
-              cd "${OBS_PROJECT}/${OBS_PACKAGE}"
+          git clone --depth 1 "${GIT_SOURCE_URL}" obs-package
+          cd obs-package
 
-              # Run manual services (tar_scm, vendor_helm, recompress, regex_replace)
-              echo ""
-              echo "=== Running OBS manual services ==="
-              osc service manualrun || true
+          if [ ! -f values.yaml ]; then
+            echo "ERROR: values.yaml not found"
+            exit 1
+          fi
 
-              echo ""
-              echo "=== Package contents after manual services ==="
-              ls -la
+          if [ ! -f _service ]; then
+            echo "ERROR: _service not found"
+            exit 1
+          fi
 
-              if [ -f values.yaml ]; then
-                echo ""
-                echo "=== values.yaml after regex_replace (with %%placeholders%%) ==="
-                head -80 values.yaml
-              else
-                echo "ERROR: values.yaml not found after manual services"
-                exit 1
-              fi
-
-              # Setup RPM macros for buildtime substitution
-              cat > ~/.rpmmacros <<"RPMEOF"
+          # Create RPM macros (needed by buildtime services)
+          cat > /root/.rpmmacros <<"RPMEOF"
           %registry_url registry.suse.com
           %img_repository_prefix trento
           RPMEOF
 
-              # Run buildtime services
-              echo ""
-              echo "=== Running buildtime substitution ==="
-              export REGISTRY=$(rpm --macros=$HOME/.rpmmacros -E "%registry_url")
-              export IMG_REPOSITORY_PREFIX=$(rpm --macros=$HOME/.rpmmacros -E "%img_repository_prefix")
+          # Run buildtime services by parsing _service file
+          echo "Running buildtime services from _service..."
 
-              echo "REGISTRY=${REGISTRY}"
-              echo "IMG_REPOSITORY_PREFIX=${IMG_REPOSITORY_PREFIX}"
+          # Extract buildtime service section
+          BUILDTIME_SERVICE=$(sed -n '/<service.*mode="buildtime"/,/<\/service>/p' _service)
 
-              /usr/lib/obs/service/replace_using_env \
-                --file values.yaml \
-                --var REGISTRY \
-                --var IMG_REPOSITORY_PREFIX
+          # Check if replace_using_env service exists
+          if echo "$BUILDTIME_SERVICE" | grep -q 'name="replace_using_env"'; then
+            # Extract file parameter
+            FILE_PARAM=$(echo "$BUILDTIME_SERVICE" | grep 'param name="file"' | sed 's/.*>\(.*\)<.*/\1/')
 
-              echo ""
-              echo "=== Final values.yaml (after buildtime substitution) ==="
-              head -80 values.yaml
+            # Build the command dynamically from multiple parameters
+            CMD="/usr/lib/obs/service/replace_using_env --file ${FILE_PARAM}"
 
-              # Copy to workspace output directory
-              cp values.yaml /workspace/obs-artifacts/values-obs.yaml
-              echo ""
-              echo "=== Processed values.yaml saved to obs-artifacts/ ==="
-            '
+            # Process eval and var parameters (multiple)
+            while IFS= read -r param_line; do
+              PARAM_NAME=$(echo "$param_line" | sed 's/.*name="\([^"]*\)".*/\1/')
+              PARAM_VALUE=$(echo "$param_line" | sed 's/.*>\(.*\)<.*/\1/')
+              CMD="${CMD} --${PARAM_NAME} \"${PARAM_VALUE}\""
+            done < <(echo "$BUILDTIME_SERVICE" | grep 'param name=' | grep -E '(eval|var)')
 
-          echo ""
-          echo "=== OBS artifacts processing complete ==="
-          ls -la obs-artifacts/
+            # Run the command for every pair of param name and value
+            eval ${CMD} > /dev/null 2>&1 || true
+          fi
+
+          # Copy to workspace output directory
+          cp values.yaml /workspace/obs-artifacts/values-obs.yaml
+          SCRIPT_EOF
+
+          chmod +x .obs-process.sh
+
+      - name: Process OBS package artifacts
+        if: matrix.source == 'obs-artifacts'
+        env:
+          OBS_CONTAINER: continuous-delivery:dev
+          OBS_PROJECT: devel:sap:trento:factory
+          OBS_PACKAGE: trento-server-helm
+          GIT_SOURCE_URL: https://src.opensuse.org/SAP-trento/trento-server-helm
+        run: |
+          mkdir -p obs-artifacts
+
+          docker run --rm \
+            --user 0 \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            -e OBS_PROJECT="${OBS_PROJECT}" \
+            -e OBS_PACKAGE="${OBS_PACKAGE}" \
+            -e GIT_SOURCE_URL="${GIT_SOURCE_URL}" \
+            "${OBS_CONTAINER}" \
+            bash /workspace/.obs-process.sh
+
+          echo "OBS artifacts processed successfully"
 
       - name: Resolve chart version
         id: version
