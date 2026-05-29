@@ -30,3 +30,41 @@ readability:
 * We indent using four spaces (soft tabs)
 * We use the https://golang.org/doc/effective_go[Effective Go]
 guidelines by default
+
+== Automation
+
+This repository uses several automated workflows to maintain quality and
+keep things up to date.
+
+=== Automated dependency updates (Dependabot)
+
+https://docs.github.com/en/code-security/dependabot[Dependabot] is
+configured (`.github/dependabot.yml`) to open pull requests for outdated
+dependencies on a weekly schedule:
+
+* **GitHub Actions** — workflow action pins (directory `/`)
+* **Go modules** — `go.mod` / `go.sum` updates (directory `/`)
+* **npm** — frontend package updates (directory `/web/frontend`)
+
+A 14-day cooldown between updates is applied for each package ecosystem
+to avoid pull-request noise.
+
+NOTE: The `github/gh-aw-actions/**` action family is version-locked to
+the `gh aw` compiler and is intentionally excluded from Dependabot
+updates.
+
+=== Automated documentation synchronization
+
+A daily GitHub Actions workflow
+(`.github/workflows/keep-docs-updated.md`) runs an AI agent that:
+
+. Inspects commits from the last 24 hours.
+. Identifies documentation files (such as `README.adoc`,
+`CONTRIBUTING.adoc`, and files under `docs/`) that are out of sync with
+code changes.
+. Opens a pull request with the necessary documentation updates.
+
+If you introduce a code change that affects user-facing behaviour,
+configuration, or APIs, the automated workflow may open a follow-up PR
+to update the relevant documentation. You are encouraged to review and
+merge those PRs promptly.
