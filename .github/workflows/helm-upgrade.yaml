@@ -306,7 +306,7 @@ jobs:
 
       - name: Upload OBS artifacts for inspection
         if: always() && matrix.source == 'obs-artifacts'
-        uses: actions/upload-artifact@ea054f0b5e8e1efb68b2729e851cda19d354b737 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: obs-processed-values
           path: |
