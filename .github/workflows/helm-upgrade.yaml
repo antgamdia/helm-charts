@@ -102,8 +102,10 @@ jobs:
           pass = anonymous
           OSCEOF
 
-              # Fetch OBS package (--unexpand to avoid source service processing)
+              # Fetch OBS package in a temp directory to avoid git permission issues
               echo "=== Fetching OBS package ==="
+              WORK_DIR=$(mktemp -d)
+              cd "${WORK_DIR}"
               osc checkout "${OBS_PROJECT}" "${OBS_PACKAGE}"
               cd "${OBS_PROJECT}/${OBS_PACKAGE}"
 
