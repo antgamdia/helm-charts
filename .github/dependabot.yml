@@ -1,20 +1,22 @@
-version: 2
 updates:
-  - package-ecosystem: "github-actions"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 14
-  - package-ecosystem: "gomod"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 14
-  - package-ecosystem: "npm"
-    directory: "/web/frontend"
-    schedule:
-      interval: "weekly"
-    cooldown:
-      default-days: 14
+- cooldown:
+    default-days: 14
+  directory: /
+  ignore:
+  - dependency-name: "github/gh-aw-actions/**" # Managed by gh aw compile. Version-locked to the gh-aw compiler; do not bump.
+  package-ecosystem: github-actions
+  schedule:
+    interval: weekly
+- cooldown:
+    default-days: 14
+  directory: /
+  package-ecosystem: gomod
+  schedule:
+    interval: weekly
+- cooldown:
+    default-days: 14
+  directory: /web/frontend
+  package-ecosystem: npm
+  schedule:
+    interval: weekly
+version: 2
