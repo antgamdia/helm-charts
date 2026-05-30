@@ -36,8 +36,7 @@ chmod 700 install-server.sh
 sudo ./install-server.sh
 ....
 
-_Note: if a Trento server is already installed in the host, it will be
-updated._
+NOTE: If a Trento server is already installed on the host, the script updates it.
 
 Please refer to the link:#helm-chart[Helm chart] section for more
 information about the Helm chart.
@@ -46,8 +45,7 @@ information about the Helm chart.
 
 ==== Helm chart
 
-The charts/trento-server directory contains the Helm chart for
-installing Trento Server in a Kubernetes cluster.
+The `charts/trento-server` directory contains the Helm chart for installing Trento Server in a Kubernetes cluster.
 
 ==== Install K3S
 
@@ -106,14 +104,13 @@ Install the Trento Server chart:
 helm install trento .
 ....
 
-or perform a rolling update:
+Or perform a rolling update:
 [source,shell]
 ....
 helm upgrade trento . --set global.trentoWeb.origin="trento.example.com"
 ....
 
-_Note: be sure to replace trento.example.com with a valid hostname that
-points to the Trento server._
+NOTE: Replace `trento.example.com` with a valid hostname that resolves to the Trento server.
 
 Now you can connect to the web server via `+http://localhost+` and point
 the agents to the cluster IP address.
@@ -132,7 +129,13 @@ Use a different container registry:
 helm install trento . --set trento-web.image.repository="ghcr.io/myrepo/trento-web" --set trento-wanda.image.repository="ghcr.io/myrepo/trento-wanda"
 ....
 
-Please refer to the the subcharts `+values.yaml+` for an advanced usage.
+For advanced configuration, review the complete values references:
+
+* xref:trento-server-values.adoc[Main chart values reference]
+* `charts/trento-server/charts/trento-web/README.md`
+* `charts/trento-server/charts/trento-wanda/README.md`
+* `charts/trento-server/charts/trento-mcp-server/README.md`
+* `charts/trento-server/charts/rabbitmq/README.md`
 
 ==== MCP Server Chart
 

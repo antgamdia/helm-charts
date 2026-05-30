@@ -39,7 +39,7 @@ helm install cert-manager jetstack/cert-manager --namespace cert-manager --creat
 
 === 4. Generate a valid configuration for cert-manager
 
-Use `+envsubst+` to substitute the templates with actual valid data
+Use `envsubst` to substitute the templates with actual valid data
 (make sure to replace the suggestions here with valid ones for your
 deployment):
 [source,bash]
@@ -52,7 +52,7 @@ envsubst < override-values.tpl.yaml > override-values.yaml
 
 === 5. Apply cluster-issuer
 
-Use `+envsubst+` to substitute the email for the domain certificate and
+Use `envsubst` to substitute the email for the domain certificate and
 apply it afterwards:
 [source,bash]
 ....
@@ -61,7 +61,7 @@ kubectl apply -f cluster-issuer.yaml
 
 === 6. Apply certificate
 
-Edit `+certificate.yaml+` to update the namespace and FQDN, and apply it
+Edit `certificate.yaml` to update the namespace and FQDN, and apply it
 afterwards:
 [source,bash]
 ....
@@ -71,10 +71,10 @@ kubectl apply -f certificate.yaml
 === 7. Deploy Trento with cert-manager support
 
 Navigate to the Trento Helm chart directory and deploy it with
-cert-manager support enabled. Remember to change the admin password:
+cert-manager support enabled. Change the admin password before deploying:
 [source,bash]
 ....
-cd helm-charts-rolling/charts/trento-server
+cd helm-charts/charts/trento-server
 helm dependency update
 helm upgrade -i trento --wait . \
 --set trento-web.adminUser.password="somepassword" \
