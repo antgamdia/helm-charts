@@ -55,5 +55,12 @@ if echo "$BUILDTIME_SERVICE" | grep -q 'name="replace_using_env"'; then
   eval ${CMD} > /dev/null 2>&1 || true
 fi
 
+# TODO: Fix known production bug - checks image missing "trento-" prefix
+# This will be removed once the upstream values.yaml is fixed in the repo
+# Wrong: registry.suse.com/trento/checks
+# Correct: registry.suse.com/trento/trento-checks
+echo "Applying hotfix for checks image path..."
+sed -i 's|registry\.suse\.com/trento/checks|registry.suse.com/trento/trento-checks|g' values.yaml
+
 # Copy to workspace output directory
 cp values.yaml /workspace/obs-artifacts/values-obs.yaml

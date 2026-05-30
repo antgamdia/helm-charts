@@ -277,5 +277,4 @@ jobs:
         with:
           name: obs-processed-values
           path: |
-            obs-artifacts/values-obs.yaml
             charts/trento-server/values-obs.yaml
