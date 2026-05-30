@@ -110,6 +110,24 @@ jobs:
 
           echo "OBS artifacts processed successfully"
 
+      - name: Prepare OBS local chart for installation
+        if: matrix.source == 'obs-artifacts'
+        run: |
+          # Copy processed OBS values
+          cp obs-artifacts/values-obs.yaml charts/trento-server/values-obs.yaml
+
+          # Dynamically add helm repos from Chart.yaml dependencies
+          while IFS='|' read -r dep_name dep_repo; do
+            if [ -n "$dep_repo" ] && [ "$dep_repo" != "null" ]; then
+              repo_alias="repo -$(echo "$dep_repo" | md5sum | cut -c1-8)"
+              echo "Adding helm repo: $repo_alias ($dep_repo)"
+              helm repo add "$repo_alias" "$dep_repo" 2>/dev/null || true
+            fi
+          done < <(yq eval '.dependencies[] | .name + "|" + .repository' charts/trento-server/Chart.yaml)
+
+          helm repo update
+          helm dependency build charts/trento-server
+
       - name: Resolve chart version
         id: version
         if: matrix.source != 'obs-artifacts'
@@ -181,11 +199,6 @@ jobs:
         run: |
           echo "${{ github.token }}" | helm registry login ghcr.io --username ${{ github.actor }} --password-stdin
 
-      - name: Prepare OBS values for installation
-        if: matrix.source == 'obs-artifacts'
-        run: |
-          cp obs-artifacts/values-obs.yaml charts/trento-server/values-obs.yaml
-
       - name: Install chart
         run: |
           # Configure chart reference and extra flags
@@ -219,8 +232,7 @@ jobs:
         if: always()
         run: bash .github/scripts/helm-upgrade-helper.sh post-install-diagnostics
 
-      - name: Build dependencies for current dev chart
-        if: matrix.source != 'obs-artifacts'
+      - name: Build dependencies for dev chart upgrade
         run: |
           # Dynamically add helm repos from Chart.yaml dependencies
           while IFS='|' read -r dep_name dep_repo; do
@@ -235,11 +247,9 @@ jobs:
           helm dependency build charts/trento-server
 
       - name: Compare container versions
-        if: matrix.source != 'obs-artifacts'
         run: bash .github/scripts/helm-upgrade-helper.sh compare-container-versions
 
       - name: Upgrade to current dev chart
-        if: matrix.source != 'obs-artifacts'
         run: |
           helm upgrade -i trento-server charts/trento-server --wait \
             --timeout 3m \
@@ -252,12 +262,7 @@ jobs:
             --set trento-mcp-server.image.tag=rolling
 
       - name: Verify upgrade
-        if: matrix.source != 'obs-artifacts'
         run: bash .github/scripts/helm-upgrade-helper.sh post-upgrade-diagnostics
-
-      - name: Verify OBS artifacts deployment
-        if: matrix.source == 'obs-artifacts'
-        run: bash .github/scripts/helm-upgrade-helper.sh post-install-diagnostics
 
       - name: Verify API is working
         run: bash .github/scripts/helm-upgrade-helper.sh verify-api
