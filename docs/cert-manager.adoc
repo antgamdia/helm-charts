@@ -1,7 +1,12 @@
 = Adding cert-manager for HTTPS
 
 This guide will help you integrate cert-manager to enable HTTPS for your
-Trento deployment using Let’s Encrypt certificates.
+Trento deployment. Two issuance strategies are covered:
+
+* **Let's Encrypt** (recommended for production): automatically provisions
+  publicly trusted certificates via ACME.
+* **Self-signed** (suitable for testing or air-gapped environments): issues
+  certificates signed by a cluster-local CA.
 
 == Prerequisites
 
@@ -9,7 +14,7 @@ Trento deployment using Let’s Encrypt certificates.
 * Helm installed
 * Trento Helm chart
 
-== Steps to Enable HTTPS
+== Steps to Enable HTTPS (Let's Encrypt)
 
 === 1. Install cert-manager CRDs
 
@@ -50,6 +55,12 @@ envsubst < cluster-issuer.tpl.yaml > cluster-issuer.yaml
 envsubst < override-values.tpl.yaml > override-values.yaml
 ....
 
+NOTE: `+override-values.tpl.yaml+` configures TLS ingress for all three
+Trento services: `+trento-web+` (path `/`), `+trento-wanda+` (path
+`+/wanda+`), and `+trento-mcp-server+` (path `+/mcp+`). All three will
+share the same `+trento-tls+` secret and the `+letsencrypt-production+`
+cluster issuer.
+
 === 5. Apply cluster-issuer
 
 Use `+envsubst+` to substitute the email for the domain certificate and
@@ -76,6 +87,55 @@ cert-manager support enabled. Remember to change the admin password:
 ....
 cd helm-charts-rolling/charts/trento-server
 helm dependency update
+helm upgrade -i trento --wait . \
+--set trento-web.adminUser.password="somepassword" \
+-f override-values.yaml
+....
+
+== Alternative: Self-Signed Certificates (Testing / Air-Gapped)
+
+For environments without public DNS or internet access (e.g. local CI,
+internal staging), a self-signed `+ClusterIssuer+` is provided in
+`+hack/cert-manager/selfsigned-issuer.yaml+`.
+
+=== 1. Apply the self-signed issuer
+
+[source,bash]
+....
+kubectl apply -f selfsigned-issuer.yaml
+....
+
+This creates a `+ClusterIssuer+` named `+selfsigned-issuer+`.
+
+=== 2. Create a certificate referencing the self-signed issuer
+
+Edit `+certificate.tpl.yaml+` (or create a custom `+Certificate+`
+resource) and set `+issuerRef.name: selfsigned-issuer+` before
+applying it:
+
+[source,yaml]
+....
+spec:
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+....
+
+[source,bash]
+....
+kubectl apply -f certificate.yaml
+....
+
+=== 3. Deploy Trento with override values
+
+Use the same `+override-values.yaml+` generated from
+`+override-values.tpl.yaml+`. The ingress annotations reference
+`+letsencrypt-production+` by default; update the
+`+cert-manager.io/cluster-issuer+` annotation in each ingress entry to
+`+selfsigned-issuer+` when using self-signed certificates.
+
+[source,bash]
+....
 helm upgrade -i trento --wait . \
 --set trento-web.adminUser.password="somepassword" \
 -f override-values.yaml
