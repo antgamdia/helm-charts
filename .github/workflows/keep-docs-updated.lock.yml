@@ -51,8 +51,8 @@
 
 name: "Keep Repository Documentation Up to Date"
 on:
-  schedule:
-  - cron: "41 6 * * *"
+  # schedule:
+  #- cron: "41 6 * * *"
     # Friendly format: daily (scattered)
   workflow_dispatch:
     inputs:
