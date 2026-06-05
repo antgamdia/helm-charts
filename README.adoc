@@ -14,6 +14,8 @@ information:
 * xref:trento-server.adoc[trento-server]: Chart to deploy a fully
 functional Trento server, including the Web and Wanda components, plus
 other auxiliary services (such as the Trento MCP Server).
+* xref:trento-server-values.adoc[trento-server values reference]:
+Complete parameter reference for `charts/trento-server/values.yaml`.
 
 === Optional: SSL with cert-manager
 
